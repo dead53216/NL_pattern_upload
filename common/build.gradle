@@ -1,0 +1,20 @@
+// Common core logic — plain Java, no Minecraft or mod-loader dependencies.
+//
+// This module is NOT published as a separate jar. Each platform project
+// (1.20.1/forge, 1.21.1/neoforge, 1.20.1/fabric) compiles these sources
+// directly into its own jar via:
+//
+//     sourceSets.main.java.srcDir '../../common/src/main/java'
+//
+// This build script only exists so the module can be compiled/tested
+// standalone and imported into an IDE.
+
+plugins {
+    id 'java-library'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17) // lowest target (Forge 1.20.1)
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}

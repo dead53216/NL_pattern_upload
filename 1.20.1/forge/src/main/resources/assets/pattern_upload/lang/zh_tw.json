@@ -1,0 +1,11 @@
+{
+  "mod.pattern_upload": "Pattern Upload",
+  "pattern_upload.search": "搜尋…",
+  "pattern_upload.title.machines": "選擇對應機器",
+  "pattern_upload.no_machine": "未指定機器（點擊選擇）",
+  "pattern_upload.machine.tooltip": "點擊選擇該樣板對應的機器",
+  "pattern_upload.full": "滿",
+  "pattern_upload.full.tooltip": "該目的地樣板槽已滿",
+  "pattern_upload.refreshing": "重新排序中…",
+  "pattern_upload.empty": "沒有可用的目的地"
+}

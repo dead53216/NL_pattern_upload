@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "package": "com.patternupload.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "pattern_upload.refmap.json",
+  "mixins": [],
+  "client": [
+    "MessageClientMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

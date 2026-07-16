@@ -1,0 +1,135 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    id 'org.spongepowered.mixin' version '0.7.+'
+}
+
+def modVersion = { def vls = file('../../VERSION').readLines('UTF-8')*.trim(); def cv = vls.find { it.startsWith('CURRENT_VERSION=') }; cv ? cv.substring(16).trim() : vls.find { it && !it.contains('=') } }()
+version = modVersion
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+// GTO 整合包全家（gtocore/gtolib/gtceu）皆為 Java 21 class files，整合包本身也以 Java 21 執行，
+// 故本 mod 跟隨 Java 21（非一般 1.20.1 mod 的 17）。
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+sourceSets {
+    main {
+        java {
+            // Platform sources + shared loader-independent core logic
+            srcDir '../../common/src/main/java'
+        }
+    }
+}
+
+minecraft {
+    mappings channel: 'official', version: minecraft_version
+    copyIdeResources = true
+
+    runs {
+        configureEach {
+            workingDirectory project.file("run/${it.name}")
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+
+        client {
+        }
+
+        server {
+            args '--nogui'
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://repo.spongepowered.org/repository/maven-public/' }
+    // GTOCore / gtolib / GTCEu / AE2(gto fork) — 全部由 GTO 官方 maven 提供。
+    // 忽略 Gradle module metadata（其 .module 要求 JVM21，與本 mod 的 Java 17 toolchain 衝突）
+    maven {
+        url = 'https://maven.gtodyssey.com/releases'
+        metadataSources {
+            mavenPom()
+            artifact()
+        }
+    }
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+
+    // MixinExtras (@WrapMethod / @WrapOperation); bundled into the jar via Jar-in-Jar
+    compileOnly(annotationProcessor("io.github.llamalad7:mixinextras-common:${mixinextras_version}"))
+    implementation(jarJar("io.github.llamalad7:mixinextras-forge:${mixinextras_version}")) {
+        jarJar.ranged(it, "[${mixinextras_version},)")
+    }
+
+    // GTO 整合包元件（runtime 由整合包提供，故 compileOnly）
+    compileOnly fg.deobf("com.gto:gtocore-forge-1.20.1:${gtocore_version}")
+    compileOnly fg.deobf("com.gto:gtolib-forge-1.20.1:${gtolib_version}")
+    compileOnly fg.deobf("com.gregtechceu.gtceu:gtceu-1.20.1-forge-1.20.1:${gtceu_version}")
+    compileOnly fg.deobf("appeng:appliedenergistics2-forge-1.20.1:${ae2_version}")
+    // GTCEu(gto) 的 registry 基類所在函式庫（僅編譯期型別解析用）
+    compileOnly "com.gto:datasynclib-forge-1.20.1:${datasynclib_version}"
+}
+
+mixin {
+    add sourceSets.main, "${mod_id}.refmap.json"
+    config "${mod_id}.mixins.json"
+}
+
+jarJar.enable()
+reobf {
+    jarJar { }
+}
+tasks.jarJar.finalizedBy('reobfJarJar')
+
+// The plain jar lacks the embedded MixinExtras and is only an intermediate;
+// mark it 'slim' and make the jarJar output the main (classifier-less) artifact.
+tasks.named('jar', Jar).configure { archiveClassifier = 'slim' }
+tasks.named('jarJar').configure { archiveClassifier = '' }
+
+tasks.named('processResources', ProcessResources).configure {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            forge_version          : forge_version,
+            forge_version_range    : forge_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : modVersion,
+    ]
+
+    inputs.properties replaceProperties
+
+    filesMatching(['META-INF/mods.toml']) {
+        expand replaceProperties
+    }
+}
+
+tasks.withType(Jar).configureEach {
+    manifest {
+        attributes([
+                'MixinConfigs': "${mod_id}.mixins.json"
+        ])
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}

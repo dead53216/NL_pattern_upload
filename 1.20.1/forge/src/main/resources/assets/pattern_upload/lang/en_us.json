@@ -1,0 +1,11 @@
+{
+  "mod.pattern_upload": "Pattern Upload",
+  "pattern_upload.search": "Search…",
+  "pattern_upload.title.machines": "Select Machine",
+  "pattern_upload.no_machine": "No machine set (click to select)",
+  "pattern_upload.machine.tooltip": "Click to select which machine this pattern belongs to",
+  "pattern_upload.full": "Full",
+  "pattern_upload.full.tooltip": "This destination has no empty pattern slot",
+  "pattern_upload.refreshing": "Re-sorting…",
+  "pattern_upload.empty": "No available destination"
+}
