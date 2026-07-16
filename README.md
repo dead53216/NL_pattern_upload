@@ -11,22 +11,25 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 - **MACHINE_SELECT 模式**：列出所有 GTRecipeType（代表機器 icon + 本地化名 + 搜尋）；點選 → 寫入樣板 NBT 並重新請求 → 清單依新機器重新排序浮頂。
 - ESC 第一下關 overlay，第二下才關終端；搜尋欄聚焦時吞按鍵避免 `E` 關閉介面。
 
-## 架構（1.20.1/forge）
+## 架構（1.20.1/forge）— v1.1「零 mixin 劫持」
 
-零伺服端碼、零自訂封包 — 全部走 GTOCore 既有公開介面：
+**完全不用 mixin**（v1.0.x 的 mixin 方案已廢棄：dev 環境 gtocore 類不可被變換、
+正式包亦無法套用）。改為每幀監看 GTOCore 清單框，變可見即接管：
 
 | 元件 | 說明 |
 |---|---|
-| `mixin/MessageClientMixin` | `@Mixin(Message.Client, remap=false)` 攔 `patternDestinationReceived` HEAD → `PatternUploadClient.onDestinations` → cancel |
-| `client/PatternUploadClient` | overlay 生命週期 + Forge `ScreenEvent`（Render.Post / MouseButtonPressed.Pre / MouseScrolled.Pre / KeyPressed.Pre / CharacterTyped.Pre / Closing）疊加渲染與輸入攔截（**不對 vanilla Screen 做 mixin**，避免混淆映射風險） |
-| `client/UploadOverlay` | 面板本體（純類，非 widget）：兩模式清單、搜尋、hover/tooltip、捲動 |
+| `client/PatternUploadClient` | `ScreenEvent.Render.Pre` 輪詢 `term.gto$getPatternDestDisplay()`；`isVisible()` 一變 true → 反射抽資料 → `setVisible(false)` 藏原框 → 開 overlay。另掛 Render.Post/滑鼠/鍵盤/拖曳/Closing 事件 |
+| `client/ListBoxReflector` | 反射讀 `AESearchPatternProviderListBox.allItems`（SimpleItem: index/icon/name/full；已對照 0.5.6-alpha/beta/26.7.x），失敗自動退回原介面 |
+| `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、**標題列拖曳**（位置整場記住） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
+
+`/patternupload_test`：30 秒內開啟樣板編碼終端即注入假目的地，驗證整條劫持鏈。
 
 ### 關鍵資料流
 
 ```
 編碼鈕右鍵（GTOCore 原有）→ 伺服端 encode + 排序 → SEND_PATTERN_DESTINATION_S2C
-  → [本 mod mixin 攔截] → UploadOverlay 顯示
+  → GTOCore 填清單框 + setVisible(true) → [本 mod Render.Pre 劫持] → UploadOverlay 顯示
 
 點目的地列  → menu.gtolib$sendPattern(destIndex)          （GTOCore 介面）
 手動指定機器 → menu.gtolib$addRecipe("<type_rl>/manual")   （寫入樣板 NBT recipe 標籤 + 同步伺服端排序鍵）
@@ -43,6 +46,8 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   `com.gto:gtocore-forge-1.20.1`、`com.gto:gtolib-forge-1.20.1`、`com.gregtechceu.gtceu:gtceu-1.20.1-forge-1.20.1`、`appeng:appliedenergistics2-forge-1.20.1`、`com.gto:datasynclib-forge-1.20.1`（GTRegistry 基類）。
 - 該 maven 的 module metadata 已在 repo 宣告 `metadataSources { mavenPom(); artifact() }` 忽略（其 `.module` 綁 JVM21 屬性）。
 - `mods.toml` 強制依賴 `gtocore`。
+- **dev 測試注意**：`build/libs` 的 jar（含 `-slim`）全被 FG6 reobf 成 SRG，**不能**丟進 moddev dev 環境；
+  dev 用 `build/classes + resources` 手打的 named jar（見 build/devjar2 流程）。
 
 ## 已知限制
 

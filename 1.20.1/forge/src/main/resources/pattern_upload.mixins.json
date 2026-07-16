@@ -5,10 +5,7 @@
   "compatibilityLevel": "JAVA_17",
   "refmap": "pattern_upload.refmap.json",
   "mixins": [],
-  "client": [
-    "MessageClientMixin",
-    "MessageInitMixin"
-  ],
+  "client": [],
   "injectors": {
     "defaultRequire": 1
   }

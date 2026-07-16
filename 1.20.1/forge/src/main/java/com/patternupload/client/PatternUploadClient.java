@@ -5,7 +5,6 @@ import com.patternupload.PatternUploadMod;
 import com.gregtechceu.gtceu.api.recipe.GTRecipeType;
 import com.gregtechceu.gtceu.api.registry.GTRegistries;
 
-import com.gtocore.client.Message;
 import com.gtocore.integration.ae.hooks.IExtendedPatternEncodingTerm;
 
 import net.minecraft.client.Minecraft;
@@ -20,13 +19,18 @@ import appeng.client.gui.me.items.PatternEncodingTermScreen;
 
 import org.jetbrains.annotations.Nullable;
 
+import java.util.List;
+
 /**
- * 客戶端狀態橋接：接手 GTOCore 的目的地清單，改顯示本 mod 的上傳介面 overlay。
- * overlay 不注入畫面 widget 樹，而是透過 Forge ScreenEvent 疊加渲染與攔截輸入
- * （避免對 vanilla Screen 做 mixin 的混淆風險）。
+ * 零 mixin 架構：
+ * 每幀（Render.Pre）檢查 GTOCore 的目的地清單框是否剛被設為可見；
+ * 一可見即「劫持」——反射抽出資料、把原清單藏起來、改開本 mod 的 overlay。
+ * 送出/指定機器仍走 GTOCore 既有介面方法（純呼叫，不需類變換）。
  */
 @Mod.EventBusSubscriber(modid = PatternUploadMod.MOD_ID, value = Dist.CLIENT)
 public final class PatternUploadClient {
+
+    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
 
     @Nullable
     private static UploadOverlay overlay;
@@ -35,86 +39,17 @@ public final class PatternUploadClient {
     static GTRecipeType lastManualType;
     /** 手動指定後等待伺服端重送清單中；此時保留 lastManualType。 */
     private static boolean expectingRefresh;
-
-    private PatternUploadClient() {}
-
-    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
-
-    /** 由 MessageClientMixin 設 true：證明 mixin 已套用且注入碼有執行。 */
-    public static volatile boolean interceptSeen = false;
-    /** 進世界後自動自檢的倒數（tick）；-1 = 已測過。 */
-    private static int selfTestCountdown = -2;
+    /** 玩家拖曳後記住的面板位置（本場遊戲有效）。 */
+    @Nullable
+    static Integer panelX;
+    @Nullable
+    static Integer panelY;
 
     static {
-        LOGGER.info("[pattern_upload] PatternUploadClient loaded");
+        LOGGER.info("[pattern_upload] PatternUploadClient loaded (hijack mode, no mixin)");
     }
 
-    /** 進世界 ~5 秒後自動觸發一次假資料呼叫，判定 mixin 是否套用。 */
-    @SubscribeEvent
-    public static void onClientTick(net.minecraftforge.event.TickEvent.ClientTickEvent event) {
-        if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) {
-            return;
-        }
-        if (selfTestCountdown == -2) {
-            selfTestCountdown = 300; // 客戶端啟動後 ~15 秒（不需進世界）
-            return;
-        }
-        if (selfTestCountdown > 0) {
-            selfTestCountdown--;
-            return;
-        }
-        if (selfTestCountdown == 0) {
-            selfTestCountdown = -1;
-            runSelfTest();
-        }
-    }
-
-    private static void runSelfTest() {
-        LOGGER.info("[pattern_upload] SELF-TEST: calling patternDestinationReceived with dummy data...");
-        try {
-            var dummyGroup = new appeng.api.implementations.blockentities.PatternContainerGroup(
-                    appeng.api.stacks.AEItemKey.of(net.minecraft.world.item.Items.CRAFTING_TABLE),
-                    net.minecraft.network.chat.Component.literal("pattern_upload self-test"),
-                    java.util.List.of());
-            Message.Client.patternDestinationReceived(new Message.PatternDestination[] {
-                    new Message.PatternDestination(dummyGroup, false)
-            });
-        } catch (Throwable t) {
-            LOGGER.error("[pattern_upload] SELF-TEST threw", t);
-        }
-        if (interceptSeen) {
-            LOGGER.info("[pattern_upload] SELF-TEST OK: mixin 已套用（攔截有效）");
-        } else {
-            LOGGER.error("[pattern_upload] SELF-TEST FAILED: mixin 未套用！patternDestinationReceived 未被本 mod 攔截");
-        }
-        var mc = Minecraft.getInstance();
-        if (mc.player != null) {
-            mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
-                    interceptSeen ? "[pattern_upload] 自檢通過：mixin 已套用"
-                            : "[pattern_upload] 自檢失敗：mixin 未套用（詳見 log）"),
-                    false);
-        }
-    }
-
-    /** MessageClientMixin 進入點。回傳 true = 已接手，GTOCore 原清單不再顯示。 */
-    public static boolean onDestinations(Message.PatternDestination[] destinations) {
-        Minecraft mc = Minecraft.getInstance();
-        if (!(mc.screen instanceof PatternEncodingTermScreen<?> screen)) {
-            LOGGER.info("[pattern_upload] skip: screen is {}", mc.screen == null ? "null" : mc.screen.getClass().getName());
-            return false;
-        }
-        if (!(screen.getMenu() instanceof IExtendedPatternEncodingTerm.Menu)) {
-            LOGGER.info("[pattern_upload] skip: menu is {}", screen.getMenu().getClass().getName());
-            return false;
-        }
-        LOGGER.info("[pattern_upload] showing overlay ({} destinations)", destinations.length);
-        if (!expectingRefresh) {
-            lastManualType = null; // 新一輪上傳：清掉上次的手動指定
-        }
-        expectingRefresh = false;
-        overlay = new UploadOverlay(screen, destinations);
-        return true;
-    }
+    private PatternUploadClient() {}
 
     /** 手動指定機器：同步到伺服端（寫進樣板 NBT 的 recipe 標籤）並重新請求排序後的目的地清單。 */
     static void onManualSelect(PatternEncodingTermScreen<?> screen, GTRecipeType type) {
@@ -157,6 +92,34 @@ public final class PatternUploadClient {
         return null;
     }
 
+    // ---------------------------------------------------------------- 劫持
+
+    @SubscribeEvent
+    public static void onRenderPre(ScreenEvent.Render.Pre event) {
+        if (!(event.getScreen() instanceof PatternEncodingTermScreen<?> screen)) {
+            return;
+        }
+        if (!(screen instanceof IExtendedPatternEncodingTerm term)) {
+            return;
+        }
+        var box = term.gto$getPatternDestDisplay();
+        if (box == null || !box.isVisible()) {
+            return;
+        }
+        // GTOCore 剛把清單設為可見（新一批目的地）→ 接管
+        List<ListBoxReflector.Dest> dests = ListBoxReflector.extract(box);
+        if (dests == null) {
+            return; // 反射失敗：保留 GTOCore 原清單
+        }
+        box.setVisible(false);
+        if (!expectingRefresh) {
+            lastManualType = null; // 新一輪上傳：清掉上次的手動指定
+        }
+        expectingRefresh = false;
+        overlay = new UploadOverlay(screen, dests);
+        LOGGER.info("[pattern_upload] hijacked GTOCore destination list: {} entries", dests.size());
+    }
+
     // ------------------------------------------------------------- 事件疊加
 
     @SubscribeEvent
@@ -171,6 +134,22 @@ public final class PatternUploadClient {
     public static void onMouseClick(ScreenEvent.MouseButtonPressed.Pre event) {
         var o = activeOverlay(event);
         if (o != null && o.mouseClicked(event.getMouseX(), event.getMouseY(), event.getButton())) {
+            event.setCanceled(true);
+        }
+    }
+
+    @SubscribeEvent
+    public static void onMouseDragged(ScreenEvent.MouseDragged.Pre event) {
+        var o = activeOverlay(event);
+        if (o != null && o.mouseDragged(event.getMouseX(), event.getMouseY(), event.getMouseButton(), event.getDragX(), event.getDragY())) {
+            event.setCanceled(true);
+        }
+    }
+
+    @SubscribeEvent
+    public static void onMouseReleased(ScreenEvent.MouseButtonReleased.Pre event) {
+        var o = activeOverlay(event);
+        if (o != null && o.mouseReleased(event.getMouseX(), event.getMouseY(), event.getButton())) {
             event.setCanceled(true);
         }
     }
@@ -208,27 +187,48 @@ public final class PatternUploadClient {
         }
     }
 
+    // ---------------------------------------------------------- 測試指令
+
+    /** 等待「樣板編碼終端開啟」後注入假資料的倒數；-1 = 停用。 */
+    private static int testPending = -1;
+
     /**
-     * 診斷指令 /patternupload_test：直接以假資料呼叫 GTOCore 的
-     * patternDestinationReceived。若 log 出現 "[pattern_upload] intercepted"
-     * 代表 mixin 已套用；完全沒出現代表 mixin 未生效（環境問題）。
+     * 診斷指令 /patternupload_test：之後 30 秒內只要開啟樣板編碼終端，
+     * 就以假資料觸發 GTOCore 的清單 → 本 mod 應立即劫持並顯示自製面板。
      */
     @SubscribeEvent
     public static void onRegisterClientCommands(net.minecraftforge.client.event.RegisterClientCommandsEvent event) {
         event.getDispatcher().register(
                 com.mojang.brigadier.builder.LiteralArgumentBuilder.<net.minecraft.commands.CommandSourceStack>literal("patternupload_test")
                         .executes(ctx -> {
-                            LOGGER.info("[pattern_upload] /patternupload_test invoked, calling patternDestinationReceived with dummy data");
-                            var dummyGroup = new appeng.api.implementations.blockentities.PatternContainerGroup(
-                                    appeng.api.stacks.AEItemKey.of(net.minecraft.world.item.Items.CRAFTING_TABLE),
-                                    net.minecraft.network.chat.Component.literal("pattern_upload test"),
-                                    java.util.List.of());
-                            Message.Client.patternDestinationReceived(new Message.PatternDestination[] {
-                                    new Message.PatternDestination(dummyGroup, false)
-                            });
+                            testPending = 600; // 30 秒內開終端即觸發
                             ctx.getSource().sendSystemMessage(net.minecraft.network.chat.Component.literal(
-                                    "[pattern_upload] 測試已觸發，請查看 log 是否出現 \"[pattern_upload] intercepted\""));
+                                    "[pattern_upload] 測試待命：30 秒內開啟樣板編碼終端即會顯示測試清單"));
                             return 1;
                         }));
+    }
+
+    @SubscribeEvent
+    public static void onClientTick(net.minecraftforge.event.TickEvent.ClientTickEvent event) {
+        if (event.phase != net.minecraftforge.event.TickEvent.Phase.END || testPending < 0) {
+            return;
+        }
+        testPending--;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.screen instanceof PatternEncodingTermScreen<?>) {
+            testPending = -1;
+            LOGGER.info("[pattern_upload] TEST: injecting dummy destinations via GTOCore list");
+            try {
+                var dummyGroup = new appeng.api.implementations.blockentities.PatternContainerGroup(
+                        appeng.api.stacks.AEItemKey.of(net.minecraft.world.item.Items.CRAFTING_TABLE),
+                        net.minecraft.network.chat.Component.literal("pattern_upload test"),
+                        java.util.List.of());
+                com.gtocore.client.Message.Client.patternDestinationReceived(new com.gtocore.client.Message.PatternDestination[] {
+                        new com.gtocore.client.Message.PatternDestination(dummyGroup, false)
+                });
+            } catch (Throwable t) {
+                LOGGER.error("[pattern_upload] TEST threw", t);
+            }
+        }
     }
 }

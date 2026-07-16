@@ -2,7 +2,6 @@ package com.patternupload.client;
 
 import com.gregtechceu.gtceu.api.recipe.GTRecipeType;
 
-import com.gtocore.client.Message;
 import com.gtocore.integration.ae.hooks.IExtendedPatternEncodingTerm;
 
 import net.minecraft.client.Minecraft;
@@ -11,6 +10,9 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
+
+import appeng.api.client.AEKeyRendering;
+import appeng.api.stacks.AEKey;
 
 import appeng.client.gui.me.items.PatternEncodingTermScreen;
 
@@ -40,25 +42,33 @@ final class UploadOverlay {
     private static final int SEARCH_H = 16;
 
     private final PatternEncodingTermScreen<?> screen;
-    private final Message.PatternDestination[] destinations;
+    private final java.util.List<ListBoxReflector.Dest> destinations;
     private final Font font;
     private final EditBox searchBox;
-    private final int x;
-    private final int y;
+    private int x;
+    private int y;
+    private boolean dragging = false;
+    private int dragOffX;
+    private int dragOffY;
 
     private Mode mode = Mode.DESTINATIONS;
     private int scrollOff = 0;
     private boolean refreshing = false;
     private final List<Row> rows = new ArrayList<>();
 
-    private record Row(ItemStack icon, Component name, boolean full, int destIndex, GTRecipeType type) {}
+    private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type) {}
 
-    UploadOverlay(PatternEncodingTermScreen<?> screen, Message.PatternDestination[] destinations) {
+    UploadOverlay(PatternEncodingTermScreen<?> screen, java.util.List<ListBoxReflector.Dest> destinations) {
         this.screen = screen;
         this.destinations = destinations;
         this.font = Minecraft.getInstance().font;
-        this.x = Math.min(screen.getGuiLeft() + screen.getXSize() + 4, screen.width - PANEL_W - 2);
-        this.y = Math.max(2, screen.getGuiTop() + 4);
+        if (PatternUploadClient.panelX != null && PatternUploadClient.panelY != null) {
+            this.x = Math.max(0, Math.min(PatternUploadClient.panelX, screen.width - PANEL_W));
+            this.y = Math.max(0, Math.min(PatternUploadClient.panelY, screen.height - 40));
+        } else {
+            this.x = Math.min(screen.getGuiLeft() + screen.getXSize() + 4, screen.width - PANEL_W - 2);
+            this.y = Math.max(2, screen.getGuiTop() + 4);
+        }
         this.searchBox = new EditBox(this.font, x + 4, y + HEADER_H, PANEL_W - 8, SEARCH_H - 2, Component.empty());
         this.searchBox.setMaxLength(64);
         this.searchBox.setBordered(true);
@@ -77,15 +87,12 @@ final class UploadOverlay {
         rows.clear();
         String filter = searchBox.getValue().toLowerCase(Locale.ROOT);
         if (mode == Mode.DESTINATIONS) {
-            for (int i = 0; i < destinations.length; i++) {
-                var dest = destinations[i];
-                Component name = dest.group().name();
+            for (var dest : destinations) {
+                Component name = dest.name();
                 if (!filter.isEmpty() && !name.getString().toLowerCase(Locale.ROOT).contains(filter)) {
                     continue;
                 }
-                var iconKey = dest.group().icon();
-                ItemStack icon = iconKey != null ? iconKey.toStack() : RecipeTypeIcons.patternIcon();
-                rows.add(new Row(icon, name, dest.full(), i, null));
+                rows.add(new Row(RecipeTypeIcons.patternIcon(), dest.icon(), name, dest.full(), dest.index(), null));
             }
         } else {
             for (GTRecipeType type : RecipeTypeIcons.allTypes()) {
@@ -93,7 +100,7 @@ final class UploadOverlay {
                 if (!filter.isEmpty() && !name.getString().toLowerCase(Locale.ROOT).contains(filter)) {
                     continue;
                 }
-                rows.add(new Row(RecipeTypeIcons.icon(type), name, false, -1, type));
+                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type));
             }
         }
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - MAX_ROWS));
@@ -162,7 +169,11 @@ final class UploadOverlay {
             if (hover && !(mode == Mode.DESTINATIONS && row.full())) {
                 g.fill(x + 2, ry, x + PANEL_W - 2, ry + ROW_H, 0x40FFFFFF);
             }
-            g.renderItem(row.icon(), x + 4, ry + 1);
+            if (row.key() != null) {
+                AEKeyRendering.drawInGui(Minecraft.getInstance(), g, x + 4, ry + 1, row.key());
+            } else {
+                g.renderItem(row.icon(), x + 4, ry + 1);
+            }
             int color = (mode == Mode.DESTINATIONS && row.full()) ? 0x777777 : 0xE0E0E0;
             String name = row.name().getString();
             if (mode == Mode.DESTINATIONS && row.full()) {
@@ -206,6 +217,32 @@ final class UploadOverlay {
         return mx >= x + PANEL_W - 14 && mx < x + PANEL_W - 2 && my >= y + 4 && my < y + 16;
     }
 
+    /** 標題列空白處（扣掉左 icon 與右關閉鈕）= 拖曳把手。 */
+    private boolean isOverDragHandle(double mx, double my) {
+        return mx >= x + 22 && mx < x + PANEL_W - 15 && my >= y && my < y + HEADER_H;
+    }
+
+    boolean mouseDragged(double mx, double my, int button, double dragX, double dragY) {
+        if (!dragging) {
+            return false;
+        }
+        x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - PANEL_W));
+        y = Math.max(0, Math.min((int) my - dragOffY, screen.height - 40));
+        searchBox.setX(x + 4);
+        searchBox.setY(y + HEADER_H);
+        PatternUploadClient.panelX = x;
+        PatternUploadClient.panelY = y;
+        return true;
+    }
+
+    boolean mouseReleased(double mx, double my, int button) {
+        if (dragging) {
+            dragging = false;
+            return true;
+        }
+        return false;
+    }
+
     private int rowIndexAt(double mx, double my) {
         if (mx < x + 2 || mx >= x + PANEL_W - 2) {
             return -1;
@@ -239,6 +276,12 @@ final class UploadOverlay {
             searchBox.setValue("");
             scrollOff = 0;
             rebuildRows();
+            return true;
+        }
+        if (isOverDragHandle(mx, my)) {
+            dragging = true;
+            dragOffX = (int) mx - x;
+            dragOffY = (int) my - y;
             return true;
         }
         int idx = rowIndexAt(mx, my);

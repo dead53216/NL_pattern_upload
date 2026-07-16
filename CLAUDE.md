@@ -8,5 +8,6 @@ CLAUDE.md 只放指引；實作細節寫在 `README.md`／程式碼。
 
 - 只有 `1.20.1/forge` 平台；**Java 21 toolchain**（gto 全家 jar 為 Java 21 class files）。
 - 依賴 GTO 整合包（gtocore/gtolib/gtceu/ae2-gto，maven.gtodyssey.com，全 compileOnly）；`mods.toml` 強制 `gtocore`。
-- Mixin 目標只有一個：`com.gtocore.client.Message$Client#patternDestinationReceived`（remap=false）。**不要對 vanilla 類加 mixin**——畫面疊加一律走 Forge `ScreenEvent`（見 README）。
+- **全 mod 零 mixin**（mixins.json 留空勿加）：gtocore 類在 dev 不可被 mixin 變換、正式包亦套不上；
+  攔截一律走「Render.Pre 劫持 GTOCore 清單框 + 反射」（見 README）。
 - 與伺服端互動只准用 GTOCore 既有介面（`gtolib$sendPattern`/`gtolib$addRecipe`/`gtolib$sendEncodeRequest`），不自建封包。
