@@ -55,13 +55,8 @@ public final class PatternUploadClient {
         if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) {
             return;
         }
-        Minecraft mc = Minecraft.getInstance();
-        if (mc.player == null) {
-            selfTestCountdown = -2;
-            return;
-        }
         if (selfTestCountdown == -2) {
-            selfTestCountdown = 100; // 進世界後 5 秒
+            selfTestCountdown = 300; // 客戶端啟動後 ~15 秒（不需進世界）
             return;
         }
         if (selfTestCountdown > 0) {

@@ -6,7 +6,8 @@
   "refmap": "pattern_upload.refmap.json",
   "mixins": [],
   "client": [
-    "MessageClientMixin"
+    "MessageClientMixin",
+    "MessageInitMixin"
   ],
   "injectors": {
     "defaultRequire": 1
