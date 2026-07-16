@@ -63,8 +63,6 @@ final class UploadOverlay {
     private boolean resizing = false;
     private int dragOffX;
     private int dragOffY;
-    private int anchorRight;
-    private int anchorBottom;
 
     private Mode mode = Mode.DESTINATIONS;
     /** MACHINE_SELECT 模式的目標供應器名稱（config 的鍵）。 */
@@ -155,8 +153,9 @@ final class UploadOverlay {
                 GTRecipeType assigned = PatternUploadConfig.machineFor(providerName);
                 Component display = dest.name();
                 if (assigned != null) {
-                    // 指定後顯示「機器名（原名）」
-                    display = Component.literal(RecipeTypeIcons.name(assigned).getString() + " (" + providerName + ")");
+                    // 指定後顯示「機器名（供應器貼著的方塊）」；貼著的方塊取自清單 icon（GTOCore 給的群組圖示）
+                    String attached = dest.icon() != null ? dest.icon().getDisplayName().getString() : providerName;
+                    display = Component.literal(RecipeTypeIcons.name(assigned).getString() + " (" + attached + ")");
                 }
                 if (!PinyinMatch.matches(display.getString(), filter)) {
                     continue;
@@ -197,7 +196,8 @@ final class UploadOverlay {
     }
 
     private int panelHeight() {
-        return heightFor(Math.max(1, visibleRows()));
+        // 高度固定跟著 maxRows（縮放把手調的值），列不足時留空白，長寬才都真正可調
+        return heightFor(maxRows);
     }
 
     private ItemStack headerIcon() {
@@ -224,15 +224,15 @@ final class UploadOverlay {
         g.fill(x, y, x + w, y + h, 0xF0141414);
         g.renderOutline(x, y, w, h, 0xFF8B8B8B);
 
-        // 左上角縮放把手（⌜ 形記號）
+        // 右下角縮放把手（⌟ 形記號）
         int gripColor = isOverResizeGrip(mouseX, mouseY) || resizing ? 0xFFFFFFFF : 0xFF9B9B9B;
-        g.fill(x + 1, y + 1, x + 8, y + 2, gripColor);
-        g.fill(x + 1, y + 1, x + 2, y + 8, gripColor);
+        g.fill(x + w - 8, y + h - 2, x + w - 1, y + h - 1, gripColor);
+        g.fill(x + w - 2, y + h - 8, x + w - 1, y + h - 1, gripColor);
 
         // header：樣板機器 icon（顯示用）+ 標題 + 關閉鈕
-        g.renderItem(headerIcon(), x + 10, y + 1);
-        String title = font.plainSubstrByWidth(headerTitle().getString(), w - 29 - 13);
-        g.drawString(font, title, x + 29, y + 5, 0xFFFFFF);
+        g.renderItem(headerIcon(), x + 2, y + 1);
+        String title = font.plainSubstrByWidth(headerTitle().getString(), w - 21 - 13);
+        g.drawString(font, title, x + 21, y + 5, 0xFFFFFF);
         boolean closeHover = isOverClose(mouseX, mouseY);
         g.drawString(font, "✕", x + w - 10, y + 5, closeHover ? 0xFF5555 : 0xAAAAAA);
 
@@ -273,7 +273,7 @@ final class UploadOverlay {
         }
         if (rows.size() > maxRows) {
             String pos = (scrollOff + 1) + "-" + Math.min(scrollOff + maxRows, rows.size()) + "/" + rows.size();
-            g.drawString(font, pos, x + w - 5 - font.width(pos), y + h - 11, 0x888888);
+            g.drawString(font, pos, x + w - 12 - font.width(pos), y + h - 11, 0x888888);
         }
 
         // tooltips
@@ -300,14 +300,15 @@ final class UploadOverlay {
         return mx >= x + w - 13 && mx < x + w - 1 && my >= y + 2 && my < y + 15;
     }
 
-    /** 左上角 10x10 = 縮放把手。 */
+    /** 右下角 12x12 = 縮放把手。 */
     private boolean isOverResizeGrip(double mx, double my) {
-        return mx >= x && mx < x + 10 && my >= y && my < y + 10;
+        int h = panelHeight();
+        return mx >= x + w - 12 && mx < x + w && my >= y + h - 12 && my < y + h;
     }
 
-    /** 標題列空白處（扣掉左縮放把手與右關閉鈕）= 拖曳把手。 */
+    /** 標題列空白處（扣掉右關閉鈕）= 拖曳把手。 */
     private boolean isOverDragHandle(double mx, double my) {
-        return mx >= x && mx < x + w - 14 && my >= y && my < y + HEADER_H && !isOverResizeGrip(mx, my);
+        return mx >= x && mx < x + w - 14 && my >= y && my < y + HEADER_H;
     }
 
     /** 目的地列最左 icon 區（點擊 = 指定該供應器的機器）。 */
@@ -317,16 +318,10 @@ final class UploadOverlay {
 
     boolean mouseDragged(double mx, double my, int button, double dragX, double dragY) {
         if (resizing) {
-            // 以右下角為錨點，拖左上角改寬與列數
-            int newW = clamp(anchorRight - (int) mx, MIN_W, Math.min(MAX_W, anchorRight));
-            int targetH = anchorBottom - (int) my;
-            int newRows = clamp(Math.round((targetH - HEADER_H - SEARCH_H - 8) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
-            w = newW;
-            maxRows = newRows;
-            x = anchorRight - w;
-            y = Math.max(0, anchorBottom - heightFor(maxRows));
-            searchBox.setX(x + 4);
-            searchBox.setY(y + HEADER_H);
+            // 以左上角為錨點，拖右下角改寬與列數
+            w = clamp((int) mx - x, MIN_W, MAX_W);
+            int targetH = (int) my - y;
+            maxRows = clamp(Math.round((targetH - HEADER_H - SEARCH_H - 8) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
             searchBox.setWidth(w - 8);
             rebuildRows();
             return true;
@@ -377,8 +372,6 @@ final class UploadOverlay {
 
         if (isOverResizeGrip(mx, my)) {
             resizing = true;
-            anchorRight = x + w;
-            anchorBottom = y + heightFor(maxRows);
             return true;
         }
         if (isOverClose(mx, my)) {

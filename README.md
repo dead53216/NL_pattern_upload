@@ -13,7 +13,7 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   （代表機器 icon + 本地化名 + 搜尋）；首列「清除指定」。指定持久化於 `config/pattern_upload.json`。
 - **本地重排**：樣板自動判定的機器與供應器被指定的機器吻合（且未滿）→ 該供應器浮頂；其餘維持伺服端排序。
 - 供應器被指定後，列名顯示「機器名（原供應器名）」，icon 換成機器圖示。
-- 面板可拖曳（標題列）、**左上角把手可縮放**（寬 120–280、3–12 列，右下角為錨點）；位置與尺寸持久化於同一 config。
+- 面板可拖曳（標題列）、**右下角把手可縮放**（寬 120–280、3–12 列，左上角為錨點；高度固定跟 maxRows，列不足留空白）；位置與尺寸持久化於同一 config。
 - 預設位置：合成欄（3x3 編碼格）右邊（`PatternEncodingTermMenu.getCraftingGridSlots()` 取座標，取不到退回 GUI 右側）。
 - ESC：MACHINE_SELECT → 回清單 → 關 overlay → 關終端；搜尋欄聚焦時吞按鍵避免 `E` 關閉介面。
 
@@ -26,7 +26,7 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 |---|---|
 | `client/PatternUploadClient` | `ScreenEvent.Render.Pre` 輪詢 `term.gto$getPatternDestDisplay()`；`isVisible()` 一變 true → 反射抽資料 → `setVisible(false)` 藏原框 → 開 overlay。另掛 Render.Post/滑鼠/鍵盤/拖曳/Closing 事件 |
 | `client/ListBoxReflector` | 反射讀 `AESearchPatternProviderListBox.allItems`（SimpleItem: index/icon/name/full；已對照 0.5.6-alpha/beta/26.7.x），失敗自動退回原介面 |
-| `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、標題列拖曳、左上角縮放、本地重排 |
+| `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、標題列拖曳、右下角縮放、本地重排 |
 | `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器名稱→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器以顯示名稱為鍵（改名即獨立身分，同名共用） |
 | `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
