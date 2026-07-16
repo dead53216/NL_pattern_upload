@@ -13,3 +13,4 @@ CLAUDE.md 只放指引；實作細節寫在 `README.md`／程式碼。
 - 與伺服端互動只准用 GTOCore 既有介面（現僅 `gtolib$sendPattern`），不自建封包。
 - 供應器→機器指定為**純客戶端持久化**（`config/pattern_upload.json`，名稱為鍵）；不寫樣板 NBT。
 - `jecharacters` 拼音搜尋為軟依賴（純反射，非編譯依賴，照 NL_oreveinfilter 模式）。
+- 動攔截／dev 流程／建置鏈前，先讀工作區 `docs/NL_pattern_upload/gtocore-hijack-pitfalls.md`（雷點筆記）。
