@@ -24,6 +24,7 @@ public abstract class MessageClientMixin {
 
     @Inject(method = "patternDestinationReceived", at = @At("HEAD"), cancellable = true)
     private static void pattern_upload$onDestinations(Message.PatternDestination[] destinations, CallbackInfo ci) {
+        PatternUploadClient.interceptSeen = true;
         PATTERN_UPLOAD$LOGGER.info("[pattern_upload] intercepted patternDestinationReceived: {} destinations", destinations.length);
         try {
             if (PatternUploadClient.onDestinations(destinations)) {

@@ -40,6 +40,67 @@ public final class PatternUploadClient {
 
     private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
 
+    /** 由 MessageClientMixin 設 true：證明 mixin 已套用且注入碼有執行。 */
+    public static volatile boolean interceptSeen = false;
+    /** 進世界後自動自檢的倒數（tick）；-1 = 已測過。 */
+    private static int selfTestCountdown = -2;
+
+    static {
+        LOGGER.info("[pattern_upload] PatternUploadClient loaded");
+    }
+
+    /** 進世界 ~5 秒後自動觸發一次假資料呼叫，判定 mixin 是否套用。 */
+    @SubscribeEvent
+    public static void onClientTick(net.minecraftforge.event.TickEvent.ClientTickEvent event) {
+        if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) {
+            return;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) {
+            selfTestCountdown = -2;
+            return;
+        }
+        if (selfTestCountdown == -2) {
+            selfTestCountdown = 100; // 進世界後 5 秒
+            return;
+        }
+        if (selfTestCountdown > 0) {
+            selfTestCountdown--;
+            return;
+        }
+        if (selfTestCountdown == 0) {
+            selfTestCountdown = -1;
+            runSelfTest();
+        }
+    }
+
+    private static void runSelfTest() {
+        LOGGER.info("[pattern_upload] SELF-TEST: calling patternDestinationReceived with dummy data...");
+        try {
+            var dummyGroup = new appeng.api.implementations.blockentities.PatternContainerGroup(
+                    appeng.api.stacks.AEItemKey.of(net.minecraft.world.item.Items.CRAFTING_TABLE),
+                    net.minecraft.network.chat.Component.literal("pattern_upload self-test"),
+                    java.util.List.of());
+            Message.Client.patternDestinationReceived(new Message.PatternDestination[] {
+                    new Message.PatternDestination(dummyGroup, false)
+            });
+        } catch (Throwable t) {
+            LOGGER.error("[pattern_upload] SELF-TEST threw", t);
+        }
+        if (interceptSeen) {
+            LOGGER.info("[pattern_upload] SELF-TEST OK: mixin 已套用（攔截有效）");
+        } else {
+            LOGGER.error("[pattern_upload] SELF-TEST FAILED: mixin 未套用！patternDestinationReceived 未被本 mod 攔截");
+        }
+        var mc = Minecraft.getInstance();
+        if (mc.player != null) {
+            mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                    interceptSeen ? "[pattern_upload] 自檢通過：mixin 已套用"
+                            : "[pattern_upload] 自檢失敗：mixin 未套用（詳見 log）"),
+                    false);
+        }
+    }
+
     /** MessageClientMixin 進入點。回傳 true = 已接手，GTOCore 原清單不再顯示。 */
     public static boolean onDestinations(Message.PatternDestination[] destinations) {
         Minecraft mc = Minecraft.getInstance();
