@@ -2,6 +2,7 @@
   "mod.pattern_upload": "Pattern Upload",
   "pattern_upload.assign.clear": "Clear assignment",
   "pattern_upload.assign.tooltip": "Click to assign the machine this provider serves (for subnet interfaces)",
+  "pattern_upload.dup.warn": "Same-named providers share this assignment; rename them to separate",
   "pattern_upload.empty": "No destinations available",
   "pattern_upload.full": "Full",
   "pattern_upload.full.tooltip": "This destination has no free pattern slots",

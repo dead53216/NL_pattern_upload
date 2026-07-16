@@ -67,6 +67,8 @@ final class UploadOverlay {
     private Mode mode = Mode.DESTINATIONS;
     /** MACHINE_SELECT 模式的目標供應器名稱（config 的鍵）。 */
     private String selectingName = "";
+    /** 目標名稱在本次清單中出現多次（同名供應器會共用指定）。 */
+    private boolean selectingDup = false;
     private int scrollOff = 0;
     private final List<Row> rows = new ArrayList<>();
 
@@ -275,6 +277,12 @@ final class UploadOverlay {
             String pos = (scrollOff + 1) + "-" + Math.min(scrollOff + maxRows, rows.size()) + "/" + rows.size();
             g.drawString(font, pos, x + w - 12 - font.width(pos), y + h - 11, 0x888888);
         }
+        if (mode == Mode.MACHINE_SELECT && selectingDup) {
+            // 同名供應器共用指定（客戶端只拿得到名稱，分不出實體）——提醒玩家先改名
+            String warn = font.plainSubstrByWidth(
+                    Component.translatable("pattern_upload.dup.warn").getString(), w - 10);
+            g.drawString(font, warn, x + 5, y + h - 11, 0xFFCC44);
+        }
 
         // tooltips
         if (mode == Mode.DESTINATIONS) {
@@ -396,6 +404,8 @@ final class UploadOverlay {
                 if (isOverRowIcon(mx, my, ry)) {
                     // 點 icon → 指定該供應器對應機器（滿槽也可指定）
                     selectingName = row.providerName();
+                    selectingDup = destinations.stream()
+                            .filter(d -> d.name().getString().equals(selectingName)).count() > 1;
                     mode = Mode.MACHINE_SELECT;
                     searchBox.setValue("");
                     scrollOff = 0;
@@ -417,6 +427,7 @@ final class UploadOverlay {
     private void exitMachineSelect() {
         mode = Mode.DESTINATIONS;
         selectingName = "";
+        selectingDup = false;
         searchBox.setValue("");
         scrollOff = 0;
         rebuildRows();
