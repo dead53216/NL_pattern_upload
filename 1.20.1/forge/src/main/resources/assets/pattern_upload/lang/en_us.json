@@ -1,11 +1,10 @@
 {
   "mod.pattern_upload": "Pattern Upload",
-  "pattern_upload.search": "Search…",
-  "pattern_upload.title.machines": "Select Machine",
-  "pattern_upload.no_machine": "No machine set (click to select)",
-  "pattern_upload.machine.tooltip": "Click to select which machine this pattern belongs to",
+  "pattern_upload.assign.clear": "Clear assignment",
+  "pattern_upload.assign.tooltip": "Click to assign the machine this provider serves (for subnet interfaces)",
+  "pattern_upload.empty": "No destinations available",
   "pattern_upload.full": "Full",
-  "pattern_upload.full.tooltip": "This destination has no empty pattern slot",
-  "pattern_upload.refreshing": "Re-sorting…",
-  "pattern_upload.empty": "No available destination"
+  "pattern_upload.full.tooltip": "This destination has no free pattern slots",
+  "pattern_upload.no_machine": "Unknown machine",
+  "pattern_upload.search": "Search…"
 }

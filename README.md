@@ -1,15 +1,19 @@
 # Pattern Upload (NL_pattern_upload)
 
 GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製目的地介面：
-顯示樣板對應機器、可手動指定機器、維持「有對應機器的供應器浮頂」排序。
+顯示樣板對應機器、可對「供應器」手動指定機器（接口貼子網用）、指定吻合者浮頂並持久化。
 
 ## 功能
 
 - 攔截 GTOCore 送回客戶端的目的地清單，改開本 mod 的 overlay（GTOCore 原列表框不再顯示）。
-- **DESTINATIONS 模式**：列出伺服端已排序的目的地樣板供應器（icon + 名稱 + 滿槽標記），含搜尋欄與滾輪捲動；點擊即發送樣板（滿槽列不可點）。
-- **標題列最左 icon**：樣板對應機器的 icon（自動判定自樣板 NBT `recipe` 標籤）；判不出時顯示樣板 icon。點擊切換 **MACHINE_SELECT 模式**。
-- **MACHINE_SELECT 模式**：列出所有 GTRecipeType（代表機器 icon + 本地化名 + 搜尋）；點選 → 寫入樣板 NBT 並重新請求 → 清單依新機器重新排序浮頂。
-- ESC 第一下關 overlay，第二下才關終端；搜尋欄聚焦時吞按鍵避免 `E` 關閉介面。
+- **DESTINATIONS 模式**：列出目的地樣板供應器（icon + 名稱 + 滿槽標記），含搜尋欄（支援 JECh 拼音）與滾輪捲動；點列即發送樣板（滿槽列不可點）。
+- **標題列最左 icon**：樣板對應機器 icon（自動判定自 GTOCore `@GuiSync` 欄位）；判不出顯示樣板 icon（純顯示）。
+- **點目的地列最左 icon** → **MACHINE_SELECT 模式**：對「該供應器」指定它服務的機器
+  （供應器是 ME 接口貼子網時，伺服端判不出對應機器，這裡手動指定）。列出所有 GTRecipeType
+  （代表機器 icon + 本地化名 + 搜尋）；首列「清除指定」。指定持久化於 `config/pattern_upload.json`。
+- **本地重排**：樣板自動判定的機器與供應器被指定的機器吻合（且未滿）→ 該供應器浮頂；其餘維持伺服端排序。
+- 面板可拖曳（標題列），位置持久化於同一 config。
+- ESC：MACHINE_SELECT → 回清單 → 關 overlay → 關終端；搜尋欄聚焦時吞按鍵避免 `E` 關閉介面。
 
 ## 架構（1.20.1/forge）— v1.1「零 mixin 劫持」
 
@@ -20,7 +24,9 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 |---|---|
 | `client/PatternUploadClient` | `ScreenEvent.Render.Pre` 輪詢 `term.gto$getPatternDestDisplay()`；`isVisible()` 一變 true → 反射抽資料 → `setVisible(false)` 藏原框 → 開 overlay。另掛 Render.Post/滑鼠/鍵盤/拖曳/Closing 事件 |
 | `client/ListBoxReflector` | 反射讀 `AESearchPatternProviderListBox.allItems`（SimpleItem: index/icon/name/full；已對照 0.5.6-alpha/beta/26.7.x），失敗自動退回原介面 |
-| `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、**標題列拖曳**（位置整場記住） |
+| `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、標題列拖曳、本地重排 |
+| `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器名稱→配方類型 id）＋面板位置；供應器以顯示名稱為鍵（改名即獨立身分，同名共用） |
+| `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
 
 `/patternupload_test`：30 秒內開啟樣板編碼終端即注入假目的地，驗證整條劫持鏈。
@@ -30,14 +36,14 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 ```
 編碼鈕右鍵（GTOCore 原有）→ 伺服端 encode + 排序 → SEND_PATTERN_DESTINATION_S2C
   → GTOCore 填清單框 + setVisible(true) → [本 mod Render.Pre 劫持] → UploadOverlay 顯示
+  → [本地重排] 指定機器吻合的供應器浮頂
 
-點目的地列  → menu.gtolib$sendPattern(destIndex)          （GTOCore 介面）
-手動指定機器 → menu.gtolib$addRecipe("<type_rl>/manual")   （寫入樣板 NBT recipe 標籤 + 同步伺服端排序鍵）
-            → menu.gtolib$sendEncodeRequest()             （重新編碼 + 重排 + 重送清單 → overlay 重建）
+點目的地列       → menu.gtolib$sendPattern(destIndex)   （GTOCore 介面）
+點目的地列 icon  → MACHINE_SELECT：指定該供應器的機器 → PatternUploadConfig.assign() 落盤 → 回清單重排
 ```
 
-- 自動機器判定：反射讀 GTOCore menu 的 `@GuiSync` 欄位 `gtocore$recipe`（`"<type_rl>/<recipe>"`），失敗時退回樣板 icon（僅影響顯示）。
-- 手動指定暫存 `lastManualType`，等重送清單期間保留（`expectingRefresh`），新一輪上傳自動清除。
+- 自動機器判定：反射讀 GTOCore menu 的 `@GuiSync` 欄位 `gtocore$recipe`（`"<type_rl>/<recipe>"`），失敗退回樣板 icon（僅影響顯示與本地重排）。
+- 供應器指定純客戶端持久化（不寫樣板 NBT、不動伺服端）；v1.1 的「寫樣板 NBT 指定機器」路徑已移除。
 
 ## 建置注意
 
@@ -52,5 +58,5 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 ## 已知限制
 
 - 只處理「這次編碼的那張」樣板（設計如此）。
-- 目的地排序完全沿用 GTOCore 伺服端邏輯（空槽 > 機器吻合 > 名稱吻合）。
-- 手動指定寫入的樣板 NBT `recipe` 值為 `<type_rl>/manual`。
+- 基礎排序沿用 GTOCore 伺服端邏輯（空槽 > 機器吻合 > 名稱吻合）；本地只再把「被指定機器且吻合」者提到最前。
+- 供應器指定以顯示名稱為鍵：同名供應器共用同一指定；改名後需重新指定。

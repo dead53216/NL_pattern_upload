@@ -34,16 +34,6 @@ public final class PatternUploadClient {
 
     @Nullable
     private static UploadOverlay overlay;
-    /** 玩家本次手動指定的機器（優先於從樣板 NBT 同步回來的自動判定）。 */
-    @Nullable
-    static GTRecipeType lastManualType;
-    /** 手動指定後等待伺服端重送清單中；此時保留 lastManualType。 */
-    private static boolean expectingRefresh;
-    /** 玩家拖曳後記住的面板位置（本場遊戲有效）。 */
-    @Nullable
-    static Integer panelX;
-    @Nullable
-    static Integer panelY;
 
     static {
         LOGGER.info("[pattern_upload] PatternUploadClient loaded (hijack mode, no mixin)");
@@ -51,25 +41,13 @@ public final class PatternUploadClient {
 
     private PatternUploadClient() {}
 
-    /** 手動指定機器：同步到伺服端（寫進樣板 NBT 的 recipe 標籤）並重新請求排序後的目的地清單。 */
-    static void onManualSelect(PatternEncodingTermScreen<?> screen, GTRecipeType type) {
-        lastManualType = type;
-        expectingRefresh = true;
-        var menu = screen.getMenu();
-        ((com.gtolib.api.ae2.IPatterEncodingTermMenu) menu).gtolib$addRecipe(type.registryName + "/manual");
-        ((IExtendedPatternEncodingTerm.Menu) menu).gtolib$sendEncodeRequest();
-    }
-
     public static void removeOverlay() {
         overlay = null;
     }
 
-    /** 目前樣板對應的配方類型：手動指定優先，否則讀選單同步的樣板 recipe 資訊（GTOCore @GuiSync 欄位）。 */
+    /** 目前樣板對應的配方類型：讀選單同步的樣板 recipe 資訊（GTOCore @GuiSync 欄位）。 */
     @Nullable
     static GTRecipeType currentRecipeType(AbstractContainerMenu menu) {
-        if (lastManualType != null) {
-            return lastManualType;
-        }
         try {
             Object value = menu.getClass().getField("gtocore$recipe").get(menu);
             if (value instanceof String s && !s.isEmpty()) {
@@ -112,10 +90,6 @@ public final class PatternUploadClient {
             return; // 反射失敗：保留 GTOCore 原清單
         }
         box.setVisible(false);
-        if (!expectingRefresh) {
-            lastManualType = null; // 新一輪上傳：清掉上次的手動指定
-        }
-        expectingRefresh = false;
         overlay = new UploadOverlay(screen, dests);
         LOGGER.info("[pattern_upload] hijacked GTOCore destination list: {} entries", dests.size());
     }
@@ -182,8 +156,6 @@ public final class PatternUploadClient {
     public static void onScreenClosing(ScreenEvent.Closing event) {
         if (overlay != null && event.getScreen() == overlay.screen()) {
             overlay = null;
-            lastManualType = null;
-            expectingRefresh = false;
         }
     }
 

@@ -19,14 +19,15 @@ import appeng.client.gui.me.items.PatternEncodingTermScreen;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * 上傳介面 overlay：由 ScreenEvent 疊加在樣板編碼終端上。
- * DESTINATIONS 模式列出（伺服端已排序的）目的地樣板供應器；
- * 最左 icon 顯示樣板對應機器（判不出時顯示樣板 icon），點擊切換 MACHINE_SELECT 模式手動指定機器，
- * 指定後重新請求 → 有對應機器的供應器浮頂。
+ * DESTINATIONS 模式列出目的地樣板供應器；標題列最左顯示樣板對應機器（自動判定）。
+ * 點「目的地列的 icon」→ MACHINE_SELECT 模式指定該供應器是什麼機器（接口貼子網時用），
+ * 指定持久化於 config/pattern_upload.json；與樣板機器吻合的供應器本地浮頂。
+ * 搜尋欄支援 Just Enough Characters 拼音比對（軟依賴）。
  */
 final class UploadOverlay {
 
@@ -35,11 +36,13 @@ final class UploadOverlay {
         MACHINE_SELECT
     }
 
-    private static final int PANEL_W = 172;
-    private static final int ROW_H = 18;
-    private static final int MAX_ROWS = 8;
-    private static final int HEADER_H = 22;
-    private static final int SEARCH_H = 16;
+    private static final int PANEL_W = 150;
+    private static final int ROW_H = 16;
+    private static final int MAX_ROWS = 6;
+    private static final int HEADER_H = 18;
+    private static final int SEARCH_H = 14;
+    /** MACHINE_SELECT 清單裡「清除指定」列的 destIndex 哨兵值。 */
+    private static final int CLEAR_ROW = -2;
 
     private final PatternEncodingTermScreen<?> screen;
     private final java.util.List<ListBoxReflector.Dest> destinations;
@@ -52,8 +55,9 @@ final class UploadOverlay {
     private int dragOffY;
 
     private Mode mode = Mode.DESTINATIONS;
+    /** MACHINE_SELECT 模式的目標供應器名稱（config 的鍵）。 */
+    private String selectingName = "";
     private int scrollOff = 0;
-    private boolean refreshing = false;
     private final List<Row> rows = new ArrayList<>();
 
     private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type) {}
@@ -62,9 +66,11 @@ final class UploadOverlay {
         this.screen = screen;
         this.destinations = destinations;
         this.font = Minecraft.getInstance().font;
-        if (PatternUploadClient.panelX != null && PatternUploadClient.panelY != null) {
-            this.x = Math.max(0, Math.min(PatternUploadClient.panelX, screen.width - PANEL_W));
-            this.y = Math.max(0, Math.min(PatternUploadClient.panelY, screen.height - 40));
+        Integer px = PatternUploadConfig.panelX();
+        Integer py = PatternUploadConfig.panelY();
+        if (px != null && py != null) {
+            this.x = Math.max(0, Math.min(px, screen.width - PANEL_W));
+            this.y = Math.max(0, Math.min(py, screen.height - 40));
         } else {
             this.x = Math.min(screen.getGuiLeft() + screen.getXSize() + 4, screen.width - PANEL_W - 2);
             this.y = Math.max(2, screen.getGuiTop() + 4);
@@ -85,19 +91,35 @@ final class UploadOverlay {
 
     private void rebuildRows() {
         rows.clear();
-        String filter = searchBox.getValue().toLowerCase(Locale.ROOT);
+        String filter = searchBox.getValue();
         if (mode == Mode.DESTINATIONS) {
-            for (var dest : destinations) {
+            // 本地重排：被指定機器且吻合本樣板者浮頂（伺服端排序處理不了接口類供應器）
+            GTRecipeType current = PatternUploadClient.currentRecipeType(screen.getMenu());
+            List<ListBoxReflector.Dest> ordered = new ArrayList<>(destinations);
+            if (current != null) {
+                ordered.sort(Comparator.comparingInt(
+                        d -> (!d.full() && current == PatternUploadConfig.machineFor(d.name().getString())) ? 0 : 1));
+            }
+            for (var dest : ordered) {
                 Component name = dest.name();
-                if (!filter.isEmpty() && !name.getString().toLowerCase(Locale.ROOT).contains(filter)) {
+                if (!PinyinMatch.matches(name.getString(), filter)) {
                     continue;
                 }
-                rows.add(new Row(RecipeTypeIcons.patternIcon(), dest.icon(), name, dest.full(), dest.index(), null));
+                GTRecipeType assigned = PatternUploadConfig.machineFor(name.getString());
+                if (assigned != null) {
+                    rows.add(new Row(RecipeTypeIcons.icon(assigned), null, name, dest.full(), dest.index(), assigned));
+                } else {
+                    rows.add(new Row(null, dest.icon(), name, dest.full(), dest.index(), null));
+                }
             }
         } else {
+            if (filter.isEmpty() && PatternUploadConfig.machineFor(selectingName) != null) {
+                rows.add(new Row(RecipeTypeIcons.patternIcon(), null,
+                        Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null));
+            }
             for (GTRecipeType type : RecipeTypeIcons.allTypes()) {
                 Component name = RecipeTypeIcons.name(type);
-                if (!filter.isEmpty() && !name.getString().toLowerCase(Locale.ROOT).contains(filter)) {
+                if (!PinyinMatch.matches(name.getString(), filter)) {
                     continue;
                 }
                 rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type));
@@ -128,7 +150,7 @@ final class UploadOverlay {
 
     private Component headerTitle() {
         if (mode == Mode.MACHINE_SELECT) {
-            return Component.translatable("pattern_upload.title.machines");
+            return Component.literal(selectingName);
         }
         GTRecipeType type = PatternUploadClient.currentRecipeType(screen.getMenu());
         return type != null ? RecipeTypeIcons.name(type) : Component.translatable("pattern_upload.no_machine");
@@ -142,16 +164,12 @@ final class UploadOverlay {
         g.fill(x, y, x + PANEL_W, y + h, 0xF0141414);
         g.renderOutline(x, y, PANEL_W, h, 0xFF8B8B8B);
 
-        // header：最左機器/樣板 icon（可點）+ 標題 + 關閉鈕
-        g.renderItem(headerIcon(), x + 4, y + 3);
-        boolean iconHover = isOverHeaderIcon(mouseX, mouseY);
-        if (iconHover) {
-            g.fill(x + 3, y + 2, x + 21, y + 20, 0x40FFFFFF);
-        }
-        String title = font.plainSubstrByWidth(headerTitle().getString(), PANEL_W - 24 - 14);
-        g.drawString(font, title, x + 24, y + 8, 0xFFFFFF);
+        // header：最左樣板機器 icon（顯示用）+ 標題 + 關閉鈕
+        g.renderItem(headerIcon(), x + 2, y + 1);
+        String title = font.plainSubstrByWidth(headerTitle().getString(), PANEL_W - 21 - 13);
+        g.drawString(font, title, x + 21, y + 5, 0xFFFFFF);
         boolean closeHover = isOverClose(mouseX, mouseY);
-        g.drawString(font, "✕", x + PANEL_W - 11, y + 8, closeHover ? 0xFF5555 : 0xAAAAAA);
+        g.drawString(font, "✕", x + PANEL_W - 10, y + 5, closeHover ? 0xFF5555 : 0xAAAAAA);
 
         searchBox.render(g, mouseX, mouseY, partialTick);
 
@@ -166,39 +184,43 @@ final class UploadOverlay {
             Row row = rows.get(idx);
             int ry = top + i * ROW_H;
             boolean hover = mouseX >= x + 2 && mouseX < x + PANEL_W - 2 && mouseY >= ry && mouseY < ry + ROW_H;
-            if (hover && !(mode == Mode.DESTINATIONS && row.full())) {
+            boolean iconHover = mode == Mode.DESTINATIONS && isOverRowIcon(mouseX, mouseY, ry);
+            if (hover && !(mode == Mode.DESTINATIONS && row.full() && !iconHover)) {
                 g.fill(x + 2, ry, x + PANEL_W - 2, ry + ROW_H, 0x40FFFFFF);
             }
+            if (iconHover) {
+                g.fill(x + 2, ry, x + 20, ry + ROW_H, 0x60FFFFFF);
+            }
             if (row.key() != null) {
-                AEKeyRendering.drawInGui(Minecraft.getInstance(), g, x + 4, ry + 1, row.key());
+                AEKeyRendering.drawInGui(Minecraft.getInstance(), g, x + 3, ry, row.key());
             } else {
-                g.renderItem(row.icon(), x + 4, ry + 1);
+                g.renderItem(row.icon(), x + 3, ry);
             }
             int color = (mode == Mode.DESTINATIONS && row.full()) ? 0x777777 : 0xE0E0E0;
             String name = row.name().getString();
             if (mode == Mode.DESTINATIONS && row.full()) {
                 name = name + " [" + Component.translatable("pattern_upload.full").getString() + "]";
             }
-            g.drawString(font, font.plainSubstrByWidth(name, PANEL_W - 28), x + 24, ry + 5, color);
+            g.drawString(font, font.plainSubstrByWidth(name, PANEL_W - 25), x + 21, ry + 4, color);
         }
         if (rows.isEmpty()) {
-            g.drawString(font, Component.translatable("pattern_upload.empty").getString(), x + 6, top + 5, 0x888888);
+            g.drawString(font, Component.translatable("pattern_upload.empty").getString(), x + 6, top + 4, 0x888888);
         }
         if (rows.size() > MAX_ROWS) {
             String pos = (scrollOff + 1) + "-" + Math.min(scrollOff + MAX_ROWS, rows.size()) + "/" + rows.size();
-            g.drawString(font, pos, x + PANEL_W - 6 - font.width(pos), y + h - 12, 0x888888);
-        }
-        if (refreshing) {
-            g.drawString(font, Component.translatable("pattern_upload.refreshing").getString(), x + 6, y + h - 12, 0x55FF55);
+            g.drawString(font, pos, x + PANEL_W - 5 - font.width(pos), y + h - 11, 0x888888);
         }
 
         // tooltips
-        if (iconHover && mode == Mode.DESTINATIONS) {
-            g.renderTooltip(font, Component.translatable("pattern_upload.machine.tooltip"), mouseX, mouseY);
-        } else if (mode == Mode.DESTINATIONS) {
+        if (mode == Mode.DESTINATIONS) {
             int idx = rowIndexAt(mouseX, mouseY);
-            if (idx >= 0 && rows.get(idx).full()) {
-                g.renderTooltip(font, Component.translatable("pattern_upload.full.tooltip"), mouseX, mouseY);
+            if (idx >= 0) {
+                int ry = top + (idx - scrollOff) * ROW_H;
+                if (isOverRowIcon(mouseX, mouseY, ry)) {
+                    g.renderTooltip(font, Component.translatable("pattern_upload.assign.tooltip"), mouseX, mouseY);
+                } else if (rows.get(idx).full()) {
+                    g.renderTooltip(font, Component.translatable("pattern_upload.full.tooltip"), mouseX, mouseY);
+                }
             }
         }
     }
@@ -209,17 +231,18 @@ final class UploadOverlay {
         return mx >= x && mx < x + PANEL_W && my >= y && my < y + panelHeight();
     }
 
-    private boolean isOverHeaderIcon(double mx, double my) {
-        return mx >= x + 3 && mx < x + 21 && my >= y + 2 && my < y + 20;
-    }
-
     private boolean isOverClose(double mx, double my) {
-        return mx >= x + PANEL_W - 14 && mx < x + PANEL_W - 2 && my >= y + 4 && my < y + 16;
+        return mx >= x + PANEL_W - 13 && mx < x + PANEL_W - 1 && my >= y + 2 && my < y + 15;
     }
 
-    /** 標題列空白處（扣掉左 icon 與右關閉鈕）= 拖曳把手。 */
+    /** 標題列空白處（扣掉右關閉鈕）= 拖曳把手。 */
     private boolean isOverDragHandle(double mx, double my) {
-        return mx >= x + 22 && mx < x + PANEL_W - 15 && my >= y && my < y + HEADER_H;
+        return mx >= x && mx < x + PANEL_W - 14 && my >= y && my < y + HEADER_H;
+    }
+
+    /** 目的地列最左 icon 區（點擊 = 指定該供應器的機器）。 */
+    private boolean isOverRowIcon(double mx, double my, int rowY) {
+        return mx >= x + 2 && mx < x + 20 && my >= rowY && my < rowY + ROW_H;
     }
 
     boolean mouseDragged(double mx, double my, int button, double dragX, double dragY) {
@@ -230,14 +253,13 @@ final class UploadOverlay {
         y = Math.max(0, Math.min((int) my - dragOffY, screen.height - 40));
         searchBox.setX(x + 4);
         searchBox.setY(y + HEADER_H);
-        PatternUploadClient.panelX = x;
-        PatternUploadClient.panelY = y;
         return true;
     }
 
     boolean mouseReleased(double mx, double my, int button) {
         if (dragging) {
             dragging = false;
+            PatternUploadConfig.savePanelPos(x, y); // 拖曳結束才落盤
             return true;
         }
         return false;
@@ -268,14 +290,11 @@ final class UploadOverlay {
         searchBox.setFocused(false);
 
         if (isOverClose(mx, my)) {
-            PatternUploadClient.removeOverlay();
-            return true;
-        }
-        if (isOverHeaderIcon(mx, my)) {
-            mode = mode == Mode.DESTINATIONS ? Mode.MACHINE_SELECT : Mode.DESTINATIONS;
-            searchBox.setValue("");
-            scrollOff = 0;
-            rebuildRows();
+            if (mode == Mode.MACHINE_SELECT) {
+                exitMachineSelect();
+            } else {
+                PatternUploadClient.removeOverlay();
+            }
             return true;
         }
         if (isOverDragHandle(mx, my)) {
@@ -288,18 +307,34 @@ final class UploadOverlay {
         if (idx >= 0) {
             Row row = rows.get(idx);
             if (mode == Mode.DESTINATIONS) {
-                if (!row.full()) {
+                int ry = rowsTop() + (idx - scrollOff) * ROW_H;
+                if (isOverRowIcon(mx, my, ry)) {
+                    // 點 icon → 指定該供應器對應機器（滿槽也可指定）
+                    selectingName = row.name().getString();
+                    mode = Mode.MACHINE_SELECT;
+                    searchBox.setValue("");
+                    scrollOff = 0;
+                    rebuildRows();
+                } else if (!row.full()) {
                     ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(row.destIndex());
                     PatternUploadClient.removeOverlay();
                 }
             } else {
-                // 指定機器 → 同步到伺服端（寫入樣板 NBT）並重新請求排序後的目的地
-                PatternUploadClient.onManualSelect(screen, row.type());
-                refreshing = true;
+                // 指定 / 清除該供應器的機器 → 持久化 → 回目的地清單並重排
+                PatternUploadConfig.assign(selectingName, row.destIndex() == CLEAR_ROW ? null : row.type());
+                exitMachineSelect();
             }
             return true;
         }
         return true; // 面板內其他區域：吃掉點擊避免誤觸終端
+    }
+
+    private void exitMachineSelect() {
+        mode = Mode.DESTINATIONS;
+        selectingName = "";
+        searchBox.setValue("");
+        scrollOff = 0;
+        rebuildRows();
     }
 
     boolean mouseScrolled(double mx, double my, double delta) {
@@ -312,8 +347,12 @@ final class UploadOverlay {
 
     boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-            PatternUploadClient.removeOverlay();
-            return true; // 第一次 ESC 先關 overlay，再按才關終端
+            if (mode == Mode.MACHINE_SELECT) {
+                exitMachineSelect(); // 第一下先退回目的地清單
+            } else {
+                PatternUploadClient.removeOverlay(); // 再關 overlay，第三下才關終端
+            }
+            return true;
         }
         if (searchBox.isFocused()) {
             searchBox.keyPressed(keyCode, scanCode, modifiers);
