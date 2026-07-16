@@ -38,15 +38,20 @@ public final class PatternUploadClient {
 
     private PatternUploadClient() {}
 
+    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
+
     /** MessageClientMixin 進入點。回傳 true = 已接手，GTOCore 原清單不再顯示。 */
     public static boolean onDestinations(Message.PatternDestination[] destinations) {
         Minecraft mc = Minecraft.getInstance();
         if (!(mc.screen instanceof PatternEncodingTermScreen<?> screen)) {
+            LOGGER.info("[pattern_upload] skip: screen is {}", mc.screen == null ? "null" : mc.screen.getClass().getName());
             return false;
         }
         if (!(screen.getMenu() instanceof IExtendedPatternEncodingTerm.Menu)) {
+            LOGGER.info("[pattern_upload] skip: menu is {}", screen.getMenu().getClass().getName());
             return false;
         }
+        LOGGER.info("[pattern_upload] showing overlay ({} destinations)", destinations.length);
         if (!expectingRefresh) {
             lastManualType = null; // 新一輪上傳：清掉上次的手動指定
         }
