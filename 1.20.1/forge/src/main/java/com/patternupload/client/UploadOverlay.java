@@ -23,6 +23,7 @@ import org.lwjgl.glfw.GLFW;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * 上傳介面 overlay：由 ScreenEvent 疊加在樣板編碼終端上。
@@ -143,12 +144,13 @@ final class UploadOverlay {
         rows.clear();
         String filter = searchBox.getValue();
         if (mode == Mode.DESTINATIONS) {
-            // 本地重排：被指定機器且吻合本樣板者浮頂（伺服端排序處理不了接口類供應器）
+            // 本地重排（穩定排序，同層維持伺服端順序）。伺服端的類型排序靠 menu 暫存的
+            // gto$lastRecipeType，重新編碼舊樣板時是 null → 只剩空位排序；這裡用
+            // @GuiSync 的 gtocore$recipe 補回正確的類型優先。
             GTRecipeType current = PatternUploadClient.currentRecipeType(screen.getMenu());
             List<ListBoxReflector.Dest> ordered = new ArrayList<>(destinations);
             if (current != null) {
-                ordered.sort(Comparator.comparingInt(
-                        d -> (!d.full() && current == PatternUploadConfig.machineFor(d.name().getString())) ? 0 : 1));
+                ordered.sort(Comparator.comparingInt(d -> sortTier(d, current)));
             }
             for (var dest : ordered) {
                 String providerName = dest.name().getString();
@@ -183,6 +185,34 @@ final class UploadOverlay {
             }
         }
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - maxRows));
+    }
+
+    /**
+     * 目的地排序層級（越小越前）：
+     * 0 手動指定且吻合本樣板；1 icon 反查機器支援本類型；2 名稱含類型名（電路組裝機≠組裝機這種
+     * 誤中放最後一層吻合）；3 無法判定；4 手動指定但不吻合；5 滿槽。
+     */
+    private static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
+        if (d.full()) {
+            return 5;
+        }
+        GTRecipeType assigned = PatternUploadConfig.machineFor(d.name().getString());
+        if (assigned != null) {
+            return RecipeTypeIcons.matchesType(assigned, current) ? 0 : 4;
+        }
+        var iconTypes = RecipeTypeIcons.typesForIcon(d.icon());
+        if (iconTypes != null) {
+            for (GTRecipeType t : iconTypes) {
+                if (RecipeTypeIcons.matchesType(t, current)) {
+                    return 1;
+                }
+            }
+        }
+        String typeName = RecipeTypeIcons.name(current).getString().toLowerCase(Locale.ROOT);
+        if (!typeName.isEmpty() && d.name().getString().toLowerCase(Locale.ROOT).contains(typeName)) {
+            return 2;
+        }
+        return 3;
     }
 
     private int visibleRows() {
