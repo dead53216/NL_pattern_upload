@@ -9,12 +9,14 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
 import appeng.api.client.AEKeyRendering;
 import appeng.api.stacks.AEKey;
 
 import appeng.client.gui.me.items.PatternEncodingTermScreen;
+import appeng.menu.me.items.PatternEncodingTermMenu;
 
 import org.lwjgl.glfw.GLFW;
 
@@ -26,8 +28,9 @@ import java.util.List;
  * 上傳介面 overlay：由 ScreenEvent 疊加在樣板編碼終端上。
  * DESTINATIONS 模式列出目的地樣板供應器；標題列最左顯示樣板對應機器（自動判定）。
  * 點「目的地列的 icon」→ MACHINE_SELECT 模式指定該供應器是什麼機器（接口貼子網時用），
- * 指定持久化於 config/pattern_upload.json；與樣板機器吻合的供應器本地浮頂。
- * 搜尋欄支援 Just Enough Characters 拼音比對（軟依賴）。
+ * 指定後列名顯示「機器名（原名）」，指定持久化於 config/pattern_upload.json；吻合者本地浮頂。
+ * 標題列可拖曳、左上角可縮放（寬與列數），位置與尺寸皆持久化；
+ * 預設位置在合成欄（3x3 編碼格）右邊。搜尋欄支援 Just Enough Characters 拼音比對（軟依賴）。
  */
 final class UploadOverlay {
 
@@ -36,11 +39,15 @@ final class UploadOverlay {
         MACHINE_SELECT
     }
 
-    private static final int PANEL_W = 150;
     private static final int ROW_H = 16;
-    private static final int MAX_ROWS = 6;
     private static final int HEADER_H = 18;
     private static final int SEARCH_H = 14;
+    private static final int DEFAULT_W = 150;
+    private static final int DEFAULT_ROWS = 6;
+    private static final int MIN_W = 120;
+    private static final int MAX_W = 280;
+    private static final int MIN_ROWS = 3;
+    private static final int MAX_ROWS_LIMIT = 12;
     /** MACHINE_SELECT 清單裡「清除指定」列的 destIndex 哨兵值。 */
     private static final int CLEAR_ROW = -2;
 
@@ -50,9 +57,14 @@ final class UploadOverlay {
     private final EditBox searchBox;
     private int x;
     private int y;
+    private int w;
+    private int maxRows;
     private boolean dragging = false;
+    private boolean resizing = false;
     private int dragOffX;
     private int dragOffY;
+    private int anchorRight;
+    private int anchorBottom;
 
     private Mode mode = Mode.DESTINATIONS;
     /** MACHINE_SELECT 模式的目標供應器名稱（config 的鍵）。 */
@@ -60,27 +72,65 @@ final class UploadOverlay {
     private int scrollOff = 0;
     private final List<Row> rows = new ArrayList<>();
 
-    private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type) {}
+    private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type,
+                       String providerName) {}
 
     UploadOverlay(PatternEncodingTermScreen<?> screen, java.util.List<ListBoxReflector.Dest> destinations) {
         this.screen = screen;
         this.destinations = destinations;
         this.font = Minecraft.getInstance().font;
+        this.w = clamp(orDefault(PatternUploadConfig.panelW(), DEFAULT_W), MIN_W, MAX_W);
+        this.maxRows = clamp(orDefault(PatternUploadConfig.panelRows(), DEFAULT_ROWS), MIN_ROWS, MAX_ROWS_LIMIT);
         Integer px = PatternUploadConfig.panelX();
         Integer py = PatternUploadConfig.panelY();
         if (px != null && py != null) {
-            this.x = Math.max(0, Math.min(px, screen.width - PANEL_W));
+            this.x = Math.max(0, Math.min(px, screen.width - w));
             this.y = Math.max(0, Math.min(py, screen.height - 40));
         } else {
-            this.x = Math.min(screen.getGuiLeft() + screen.getXSize() + 4, screen.width - PANEL_W - 2);
-            this.y = Math.max(2, screen.getGuiTop() + 4);
+            defaultPosition();
         }
-        this.searchBox = new EditBox(this.font, x + 4, y + HEADER_H, PANEL_W - 8, SEARCH_H - 2, Component.empty());
+        this.searchBox = new EditBox(this.font, x + 4, y + HEADER_H, w - 8, SEARCH_H - 2, Component.empty());
         this.searchBox.setMaxLength(64);
         this.searchBox.setBordered(true);
         this.searchBox.setHint(Component.translatable("pattern_upload.search"));
         this.searchBox.setResponder(s -> rebuildRows());
         rebuildRows();
+    }
+
+    /** 預設位置：合成欄（3x3 編碼格）右邊；取不到 slot 時退回終端 GUI 右側。 */
+    private void defaultPosition() {
+        int gx = -1;
+        int gy = -1;
+        try {
+            if (screen.getMenu() instanceof PatternEncodingTermMenu menu) {
+                int right = 0;
+                int top = Integer.MAX_VALUE;
+                for (Slot s : menu.getCraftingGridSlots()) {
+                    right = Math.max(right, s.x + 18);
+                    top = Math.min(top, s.y);
+                }
+                if (right > 0 && top != Integer.MAX_VALUE) {
+                    gx = screen.getGuiLeft() + right + 4;
+                    gy = screen.getGuiTop() + top - 4;
+                }
+            }
+        } catch (Throwable ignored) {
+            // AE2 內部變動時退回 GUI 右側
+        }
+        if (gx < 0) {
+            gx = screen.getGuiLeft() + screen.getXSize() + 4;
+            gy = screen.getGuiTop() + 4;
+        }
+        this.x = Math.max(0, Math.min(gx, screen.width - w));
+        this.y = Math.max(2, Math.min(gy, screen.height - heightFor(maxRows) - 2));
+    }
+
+    private static int orDefault(Integer v, int def) {
+        return v != null ? v : def;
+    }
+
+    private static int clamp(int v, int min, int max) {
+        return Math.max(min, Math.min(v, max));
     }
 
     PatternEncodingTermScreen<?> screen() {
@@ -101,43 +151,53 @@ final class UploadOverlay {
                         d -> (!d.full() && current == PatternUploadConfig.machineFor(d.name().getString())) ? 0 : 1));
             }
             for (var dest : ordered) {
-                Component name = dest.name();
-                if (!PinyinMatch.matches(name.getString(), filter)) {
+                String providerName = dest.name().getString();
+                GTRecipeType assigned = PatternUploadConfig.machineFor(providerName);
+                Component display = dest.name();
+                if (assigned != null) {
+                    // 指定後顯示「機器名（原名）」
+                    display = Component.literal(RecipeTypeIcons.name(assigned).getString() + " (" + providerName + ")");
+                }
+                if (!PinyinMatch.matches(display.getString(), filter)) {
                     continue;
                 }
-                GTRecipeType assigned = PatternUploadConfig.machineFor(name.getString());
                 if (assigned != null) {
-                    rows.add(new Row(RecipeTypeIcons.icon(assigned), null, name, dest.full(), dest.index(), assigned));
+                    rows.add(new Row(RecipeTypeIcons.icon(assigned), null, display, dest.full(), dest.index(), assigned,
+                            providerName));
                 } else {
-                    rows.add(new Row(null, dest.icon(), name, dest.full(), dest.index(), null));
+                    rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName));
                 }
             }
         } else {
             if (filter.isEmpty() && PatternUploadConfig.machineFor(selectingName) != null) {
                 rows.add(new Row(RecipeTypeIcons.patternIcon(), null,
-                        Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null));
+                        Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null, ""));
             }
             for (GTRecipeType type : RecipeTypeIcons.allTypes()) {
                 Component name = RecipeTypeIcons.name(type);
                 if (!PinyinMatch.matches(name.getString(), filter)) {
                     continue;
                 }
-                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type));
+                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, ""));
             }
         }
-        scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - MAX_ROWS));
+        scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - maxRows));
     }
 
     private int visibleRows() {
-        return Math.min(rows.size(), MAX_ROWS);
+        return Math.min(rows.size(), maxRows);
     }
 
     private int rowsTop() {
         return y + HEADER_H + SEARCH_H + 2;
     }
 
+    private static int heightFor(int rowCount) {
+        return HEADER_H + SEARCH_H + 4 + rowCount * ROW_H + 4;
+    }
+
     private int panelHeight() {
-        return HEADER_H + SEARCH_H + 4 + Math.max(1, visibleRows()) * ROW_H + 4;
+        return heightFor(Math.max(1, visibleRows()));
     }
 
     private ItemStack headerIcon() {
@@ -161,15 +221,20 @@ final class UploadOverlay {
     void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         int h = panelHeight();
 
-        g.fill(x, y, x + PANEL_W, y + h, 0xF0141414);
-        g.renderOutline(x, y, PANEL_W, h, 0xFF8B8B8B);
+        g.fill(x, y, x + w, y + h, 0xF0141414);
+        g.renderOutline(x, y, w, h, 0xFF8B8B8B);
 
-        // header：最左樣板機器 icon（顯示用）+ 標題 + 關閉鈕
-        g.renderItem(headerIcon(), x + 2, y + 1);
-        String title = font.plainSubstrByWidth(headerTitle().getString(), PANEL_W - 21 - 13);
-        g.drawString(font, title, x + 21, y + 5, 0xFFFFFF);
+        // 左上角縮放把手（⌜ 形記號）
+        int gripColor = isOverResizeGrip(mouseX, mouseY) || resizing ? 0xFFFFFFFF : 0xFF9B9B9B;
+        g.fill(x + 1, y + 1, x + 8, y + 2, gripColor);
+        g.fill(x + 1, y + 1, x + 2, y + 8, gripColor);
+
+        // header：樣板機器 icon（顯示用）+ 標題 + 關閉鈕
+        g.renderItem(headerIcon(), x + 10, y + 1);
+        String title = font.plainSubstrByWidth(headerTitle().getString(), w - 29 - 13);
+        g.drawString(font, title, x + 29, y + 5, 0xFFFFFF);
         boolean closeHover = isOverClose(mouseX, mouseY);
-        g.drawString(font, "✕", x + PANEL_W - 10, y + 5, closeHover ? 0xFF5555 : 0xAAAAAA);
+        g.drawString(font, "✕", x + w - 10, y + 5, closeHover ? 0xFF5555 : 0xAAAAAA);
 
         searchBox.render(g, mouseX, mouseY, partialTick);
 
@@ -183,10 +248,10 @@ final class UploadOverlay {
             }
             Row row = rows.get(idx);
             int ry = top + i * ROW_H;
-            boolean hover = mouseX >= x + 2 && mouseX < x + PANEL_W - 2 && mouseY >= ry && mouseY < ry + ROW_H;
+            boolean hover = mouseX >= x + 2 && mouseX < x + w - 2 && mouseY >= ry && mouseY < ry + ROW_H;
             boolean iconHover = mode == Mode.DESTINATIONS && isOverRowIcon(mouseX, mouseY, ry);
             if (hover && !(mode == Mode.DESTINATIONS && row.full() && !iconHover)) {
-                g.fill(x + 2, ry, x + PANEL_W - 2, ry + ROW_H, 0x40FFFFFF);
+                g.fill(x + 2, ry, x + w - 2, ry + ROW_H, 0x40FFFFFF);
             }
             if (iconHover) {
                 g.fill(x + 2, ry, x + 20, ry + ROW_H, 0x60FFFFFF);
@@ -201,14 +266,14 @@ final class UploadOverlay {
             if (mode == Mode.DESTINATIONS && row.full()) {
                 name = name + " [" + Component.translatable("pattern_upload.full").getString() + "]";
             }
-            g.drawString(font, font.plainSubstrByWidth(name, PANEL_W - 25), x + 21, ry + 4, color);
+            g.drawString(font, font.plainSubstrByWidth(name, w - 25), x + 21, ry + 4, color);
         }
         if (rows.isEmpty()) {
             g.drawString(font, Component.translatable("pattern_upload.empty").getString(), x + 6, top + 4, 0x888888);
         }
-        if (rows.size() > MAX_ROWS) {
-            String pos = (scrollOff + 1) + "-" + Math.min(scrollOff + MAX_ROWS, rows.size()) + "/" + rows.size();
-            g.drawString(font, pos, x + PANEL_W - 5 - font.width(pos), y + h - 11, 0x888888);
+        if (rows.size() > maxRows) {
+            String pos = (scrollOff + 1) + "-" + Math.min(scrollOff + maxRows, rows.size()) + "/" + rows.size();
+            g.drawString(font, pos, x + w - 5 - font.width(pos), y + h - 11, 0x888888);
         }
 
         // tooltips
@@ -228,16 +293,21 @@ final class UploadOverlay {
     // ----------------------------------------------------------------- input
 
     private boolean isInside(double mx, double my) {
-        return mx >= x && mx < x + PANEL_W && my >= y && my < y + panelHeight();
+        return mx >= x && mx < x + w && my >= y && my < y + panelHeight();
     }
 
     private boolean isOverClose(double mx, double my) {
-        return mx >= x + PANEL_W - 13 && mx < x + PANEL_W - 1 && my >= y + 2 && my < y + 15;
+        return mx >= x + w - 13 && mx < x + w - 1 && my >= y + 2 && my < y + 15;
     }
 
-    /** 標題列空白處（扣掉右關閉鈕）= 拖曳把手。 */
+    /** 左上角 10x10 = 縮放把手。 */
+    private boolean isOverResizeGrip(double mx, double my) {
+        return mx >= x && mx < x + 10 && my >= y && my < y + 10;
+    }
+
+    /** 標題列空白處（扣掉左縮放把手與右關閉鈕）= 拖曳把手。 */
     private boolean isOverDragHandle(double mx, double my) {
-        return mx >= x && mx < x + PANEL_W - 14 && my >= y && my < y + HEADER_H;
+        return mx >= x && mx < x + w - 14 && my >= y && my < y + HEADER_H && !isOverResizeGrip(mx, my);
     }
 
     /** 目的地列最左 icon 區（點擊 = 指定該供應器的機器）。 */
@@ -246,10 +316,25 @@ final class UploadOverlay {
     }
 
     boolean mouseDragged(double mx, double my, int button, double dragX, double dragY) {
+        if (resizing) {
+            // 以右下角為錨點，拖左上角改寬與列數
+            int newW = clamp(anchorRight - (int) mx, MIN_W, Math.min(MAX_W, anchorRight));
+            int targetH = anchorBottom - (int) my;
+            int newRows = clamp(Math.round((targetH - HEADER_H - SEARCH_H - 8) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
+            w = newW;
+            maxRows = newRows;
+            x = anchorRight - w;
+            y = Math.max(0, anchorBottom - heightFor(maxRows));
+            searchBox.setX(x + 4);
+            searchBox.setY(y + HEADER_H);
+            searchBox.setWidth(w - 8);
+            rebuildRows();
+            return true;
+        }
         if (!dragging) {
             return false;
         }
-        x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - PANEL_W));
+        x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - w));
         y = Math.max(0, Math.min((int) my - dragOffY, screen.height - 40));
         searchBox.setX(x + 4);
         searchBox.setY(y + HEADER_H);
@@ -257,16 +342,17 @@ final class UploadOverlay {
     }
 
     boolean mouseReleased(double mx, double my, int button) {
-        if (dragging) {
+        if (dragging || resizing) {
             dragging = false;
-            PatternUploadConfig.savePanelPos(x, y); // 拖曳結束才落盤
+            resizing = false;
+            PatternUploadConfig.savePanel(x, y, w, maxRows); // 拖曳/縮放結束才落盤
             return true;
         }
         return false;
     }
 
     private int rowIndexAt(double mx, double my) {
-        if (mx < x + 2 || mx >= x + PANEL_W - 2) {
+        if (mx < x + 2 || mx >= x + w - 2) {
             return -1;
         }
         int top = rowsTop();
@@ -289,6 +375,12 @@ final class UploadOverlay {
         }
         searchBox.setFocused(false);
 
+        if (isOverResizeGrip(mx, my)) {
+            resizing = true;
+            anchorRight = x + w;
+            anchorBottom = y + heightFor(maxRows);
+            return true;
+        }
         if (isOverClose(mx, my)) {
             if (mode == Mode.MACHINE_SELECT) {
                 exitMachineSelect();
@@ -310,7 +402,7 @@ final class UploadOverlay {
                 int ry = rowsTop() + (idx - scrollOff) * ROW_H;
                 if (isOverRowIcon(mx, my, ry)) {
                     // 點 icon → 指定該供應器對應機器（滿槽也可指定）
-                    selectingName = row.name().getString();
+                    selectingName = row.providerName();
                     mode = Mode.MACHINE_SELECT;
                     searchBox.setValue("");
                     scrollOff = 0;
@@ -341,7 +433,7 @@ final class UploadOverlay {
         if (!isInside(mx, my)) {
             return false;
         }
-        scrollOff = Math.max(0, Math.min(scrollOff - (int) Math.signum(delta), rows.size() - MAX_ROWS));
+        scrollOff = Math.max(0, Math.min(scrollOff - (int) Math.signum(delta), rows.size() - maxRows));
         return true;
     }
 

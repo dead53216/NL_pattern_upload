@@ -27,7 +27,7 @@ import java.util.Map;
 /**
  * 持久化設定（config/pattern_upload.json）：
  * - providerMachines：供應器名稱 → 指定的配方類型 registry id（接口類供應器手動指定用）
- * - panelX / panelY：overlay 面板拖曳後的位置
+ * - panelX / panelY / panelW / panelRows：overlay 面板拖曳後的位置與縮放後的尺寸
  * 供應器以「顯示名稱」為鍵：接口/供應器改名後即為獨立身分；同名者共用指定（符合直覺）。
  */
 final class PatternUploadConfig {
@@ -41,6 +41,10 @@ final class PatternUploadConfig {
     static Integer panelX;
     @Nullable
     static Integer panelY;
+    @Nullable
+    static Integer panelW;
+    @Nullable
+    static Integer panelRows;
 
     private PatternUploadConfig() {}
 
@@ -65,6 +69,12 @@ final class PatternUploadConfig {
             if (root.has("panelY")) {
                 panelY = root.get("panelY").getAsInt();
             }
+            if (root.has("panelW")) {
+                panelW = root.get("panelW").getAsInt();
+            }
+            if (root.has("panelRows")) {
+                panelRows = root.get("panelRows").getAsInt();
+            }
         } catch (Throwable t) {
             LOGGER.error("[pattern_upload] 讀取 {} 失敗，改用空設定", FILE, t);
         }
@@ -80,6 +90,12 @@ final class PatternUploadConfig {
             if (panelX != null && panelY != null) {
                 root.addProperty("panelX", panelX);
                 root.addProperty("panelY", panelY);
+            }
+            if (panelW != null) {
+                root.addProperty("panelW", panelW);
+            }
+            if (panelRows != null) {
+                root.addProperty("panelRows", panelRows);
             }
             Files.createDirectories(FILE.getParent());
             try (Writer writer = Files.newBufferedWriter(FILE, StandardCharsets.UTF_8)) {
@@ -113,11 +129,13 @@ final class PatternUploadConfig {
         save();
     }
 
-    /** 面板位置變動後呼叫（拖曳結束時）。 */
-    static void savePanelPos(int x, int y) {
+    /** 面板位置／尺寸變動後呼叫（拖曳或縮放結束時）。 */
+    static void savePanel(int x, int y, int w, int rows) {
         load();
         panelX = x;
         panelY = y;
+        panelW = w;
+        panelRows = rows;
         save();
     }
 
@@ -131,5 +149,17 @@ final class PatternUploadConfig {
     static Integer panelY() {
         load();
         return panelY;
+    }
+
+    @Nullable
+    static Integer panelW() {
+        load();
+        return panelW;
+    }
+
+    @Nullable
+    static Integer panelRows() {
+        load();
+        return panelRows;
     }
 }
