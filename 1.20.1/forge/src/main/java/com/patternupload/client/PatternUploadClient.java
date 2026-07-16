@@ -151,4 +151,28 @@ public final class PatternUploadClient {
             expectingRefresh = false;
         }
     }
+
+    /**
+     * 診斷指令 /patternupload_test：直接以假資料呼叫 GTOCore 的
+     * patternDestinationReceived。若 log 出現 "[pattern_upload] intercepted"
+     * 代表 mixin 已套用；完全沒出現代表 mixin 未生效（環境問題）。
+     */
+    @SubscribeEvent
+    public static void onRegisterClientCommands(net.minecraftforge.client.event.RegisterClientCommandsEvent event) {
+        event.getDispatcher().register(
+                com.mojang.brigadier.builder.LiteralArgumentBuilder.<net.minecraft.commands.CommandSourceStack>literal("patternupload_test")
+                        .executes(ctx -> {
+                            LOGGER.info("[pattern_upload] /patternupload_test invoked, calling patternDestinationReceived with dummy data");
+                            var dummyGroup = new appeng.api.implementations.blockentities.PatternContainerGroup(
+                                    appeng.api.stacks.AEItemKey.of(net.minecraft.world.item.Items.CRAFTING_TABLE),
+                                    net.minecraft.network.chat.Component.literal("pattern_upload test"),
+                                    java.util.List.of());
+                            Message.Client.patternDestinationReceived(new Message.PatternDestination[] {
+                                    new Message.PatternDestination(dummyGroup, false)
+                            });
+                            ctx.getSource().sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                                    "[pattern_upload] 測試已觸發，請查看 log 是否出現 \"[pattern_upload] intercepted\""));
+                            return 1;
+                        }));
+    }
 }
