@@ -147,14 +147,17 @@ final class UploadOverlay {
             // 本地重排（穩定排序，同層維持伺服端順序）。伺服端的類型排序靠 menu 暫存的
             // gto$lastRecipeType，重新編碼舊樣板時是 null → 只剩空位排序；這裡用
             // @GuiSync 的 gtocore$recipe 補回正確的類型優先。
-            GTRecipeType current = PatternUploadClient.currentRecipeType(screen.getMenu());
+            // 合成類樣板（craftMode）：類型與指定皆不適用，完全沿用伺服端順序
+            //（gto$craftFirst 已把分子裝配室/裝配矩陣排前）。
+            boolean craft = PatternUploadClient.isCraftMode(screen.getMenu());
+            GTRecipeType current = craft ? null : PatternUploadClient.currentRecipeType(screen.getMenu());
             List<ListBoxReflector.Dest> ordered = new ArrayList<>(destinations);
             if (current != null) {
                 ordered.sort(Comparator.comparingInt(d -> sortTier(d, current)));
             }
             for (var dest : ordered) {
                 String providerName = dest.name().getString();
-                GTRecipeType assigned = PatternUploadConfig.machineFor(providerName);
+                GTRecipeType assigned = craft ? null : PatternUploadConfig.machineFor(providerName);
                 Component display = dest.name();
                 if (assigned != null) {
                     // 指定後顯示「機器名（供應器貼著的方塊）」；貼著的方塊取自清單 icon（GTOCore 給的群組圖示）
@@ -232,9 +235,16 @@ final class UploadOverlay {
         return heightFor(maxRows);
     }
 
+    private boolean craftMode() {
+        return PatternUploadClient.isCraftMode(screen.getMenu());
+    }
+
     private ItemStack headerIcon() {
         if (mode == Mode.MACHINE_SELECT) {
             return RecipeTypeIcons.patternIcon();
+        }
+        if (craftMode()) {
+            return new ItemStack(net.minecraft.world.item.Items.CRAFTING_TABLE);
         }
         GTRecipeType type = PatternUploadClient.currentRecipeType(screen.getMenu());
         return type != null ? RecipeTypeIcons.icon(type) : RecipeTypeIcons.patternIcon();
@@ -243,6 +253,9 @@ final class UploadOverlay {
     private Component headerTitle() {
         if (mode == Mode.MACHINE_SELECT) {
             return Component.literal(selectingName);
+        }
+        if (craftMode()) {
+            return Component.translatable("pattern_upload.craft.title");
         }
         GTRecipeType type = PatternUploadClient.currentRecipeType(screen.getMenu());
         return type != null ? RecipeTypeIcons.name(type) : Component.translatable("pattern_upload.no_machine");
@@ -281,7 +294,7 @@ final class UploadOverlay {
             Row row = rows.get(idx);
             int ry = top + i * ROW_H;
             boolean hover = mouseX >= x + 2 && mouseX < x + w - 2 && mouseY >= ry && mouseY < ry + ROW_H;
-            boolean iconHover = mode == Mode.DESTINATIONS && isOverRowIcon(mouseX, mouseY, ry);
+            boolean iconHover = mode == Mode.DESTINATIONS && !craftMode() && isOverRowIcon(mouseX, mouseY, ry);
             if (hover && !(mode == Mode.DESTINATIONS && row.full() && !iconHover)) {
                 g.fill(x + 2, ry, x + w - 2, ry + ROW_H, 0x40FFFFFF);
             }
@@ -319,7 +332,7 @@ final class UploadOverlay {
             int idx = rowIndexAt(mouseX, mouseY);
             if (idx >= 0) {
                 int ry = top + (idx - scrollOff) * ROW_H;
-                if (isOverRowIcon(mouseX, mouseY, ry)) {
+                if (!craftMode() && isOverRowIcon(mouseX, mouseY, ry)) {
                     g.renderTooltip(font, Component.translatable("pattern_upload.assign.tooltip"), mouseX, mouseY);
                 } else if (rows.get(idx).full()) {
                     g.renderTooltip(font, Component.translatable("pattern_upload.full.tooltip"), mouseX, mouseY);
@@ -431,7 +444,7 @@ final class UploadOverlay {
             Row row = rows.get(idx);
             if (mode == Mode.DESTINATIONS) {
                 int ry = rowsTop() + (idx - scrollOff) * ROW_H;
-                if (isOverRowIcon(mx, my, ry)) {
+                if (!craftMode() && isOverRowIcon(mx, my, ry)) {
                     // 點 icon → 指定該供應器對應機器（滿槽也可指定）
                     selectingName = row.providerName();
                     selectingDup = destinations.stream()

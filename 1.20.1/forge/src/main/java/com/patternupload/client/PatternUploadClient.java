@@ -45,9 +45,21 @@ public final class PatternUploadClient {
         overlay = null;
     }
 
+    /**
+     * 非處理樣板（合成/鍛造/切石）只有分子裝配室或裝配矩陣能做，
+     * 配方類型概念不適用；伺服端 gto$craftFirst 已把合成容器排前，本地不要再動。
+     */
+    static boolean isCraftMode(AbstractContainerMenu menu) {
+        return menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm &&
+                petm.getMode() != appeng.parts.encoding.EncodingMode.PROCESSING;
+    }
+
     /** 目前樣板對應的配方類型：讀選單同步的樣板 recipe 資訊（GTOCore @GuiSync 欄位）。 */
     @Nullable
     static GTRecipeType currentRecipeType(AbstractContainerMenu menu) {
+        if (isCraftMode(menu)) {
+            return null; // 殘留的 gtocore$recipe 不適用於合成類樣板
+        }
         try {
             Object value = menu.getClass().getField("gtocore$recipe").get(menu);
             if (value instanceof String s && !s.isEmpty()) {
