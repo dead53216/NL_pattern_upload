@@ -69,6 +69,23 @@ public final class RecipeTypeIcons {
         return null;
     }
 
+    /**
+     * 目的地是否為「合成容器」（分子裝配室／裝配矩陣——合成類樣板只有它們能做）。
+     * 由 icon 物品 registry id 判定：ae2:molecular_assembler、expatternprovider:ex_molecular_assembler、
+     * expatternprovider:assembler_matrix_*、gtocore:super_molecular_assembler。
+     */
+    public static boolean isCraftContainer(@Nullable AEKey icon) {
+        if (!(icon instanceof AEItemKey itemKey)) {
+            return false;
+        }
+        var rl = net.minecraftforge.registries.ForgeRegistries.ITEMS.getKey(itemKey.getItem());
+        if (rl == null) {
+            return false;
+        }
+        String path = rl.getPath();
+        return path.contains("molecular_assembler") || path.startsWith("assembler_matrix");
+    }
+
     /** type 是否算支援 target（含 gtceu 小配方表對映，跟 GTOCore 伺服端邏輯一致）。 */
     public static boolean matchesType(@Nullable GTRecipeType type, GTRecipeType target) {
         if (type == null) {

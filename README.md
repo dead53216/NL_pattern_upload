@@ -16,8 +16,10 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   伺服端類型排序靠 menu 暫存 `gto$lastRecipeType`（重編舊樣板時 = null，只剩空位排序，
   且字串比對會誤中「電路組裝機」含「組裝機」）——本地用 `@GuiSync` 的 `gtocore$recipe` 補正。
 - **合成類樣板**（CRAFTING/SMITHING/STONECUTTING，`menu.getMode()` 判定）：只有分子裝配室／裝配矩陣能做
-  → **不開面板，右鍵直接上傳第一個目的地**（伺服端 `gto$craftFirst` 已把有空位的合成容器排最前，
-  第一個就滿＝全滿 → 停止動作），actionbar 顯示已上傳／全滿提示。
+  → **不開面板，右鍵直傳**：客戶端以 icon 認合成容器（`molecular_assembler`／`assembler_matrix_*`
+  registry id），挑第一個未滿者上傳；全滿 → 停止動作。actionbar 顯示已上傳／全滿提示。
+  伺服端 `gto$craftFirst` 對這些容器不可靠（`isCraftingContainer` 未實作，分子裝配室可能排最後），
+  一台都認不出時退回伺服端第一個未滿。
 - 供應器被指定後，列名顯示「機器名（原供應器名）」，icon 換成機器圖示。
 - 面板可拖曳（標題列）、**右下角把手可縮放**（寬 120–280、3–12 列，左上角為錨點；高度固定跟 maxRows，列不足留空白）；位置與尺寸持久化於同一 config。
 - 預設位置：合成欄（3x3 編碼格）右邊（`PatternEncodingTermMenu.getCraftingGridSlots()` 取座標，取不到退回 GUI 右側）。

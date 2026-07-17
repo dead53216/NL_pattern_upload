@@ -103,18 +103,38 @@ public final class PatternUploadClient {
         }
         box.setVisible(false);
         if (isCraftMode(screen.getMenu())) {
-            // 合成/鍛造/切石樣板：只有分子裝配室/裝配矩陣能做（伺服端 gto$craftFirst 已排最前），
-            // 不開面板直接上傳第一個目的地；第一個就滿＝沒空位 → 停止動作
+            // 合成/鍛造/切石樣板：只有分子裝配室/裝配矩陣能做。伺服端 gto$craftFirst 對這些容器
+            // 不可靠（isCraftingContainer 沒實作、平手看網路迭代順序，分子裝配室可能排最後），
+            // 所以客戶端自己以 icon 認合成容器：挑第一個未滿的合成容器直傳；全滿 → 停止動作。
             overlay = null;
             var player = Minecraft.getInstance().player;
-            if (!dests.isEmpty() && !dests.get(0).full()) {
-                var first = dests.get(0);
-                ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(first.index());
+            ListBoxReflector.Dest target = null;
+            boolean sawCraftContainer = false;
+            for (var d : dests) {
+                if (RecipeTypeIcons.isCraftContainer(d.icon())) {
+                    sawCraftContainer = true;
+                    if (!d.full()) {
+                        target = d;
+                        break;
+                    }
+                }
+            }
+            if (!sawCraftContainer) {
+                // 一台合成容器都認不出（icon 異動或改名成自訂圖示）→ 退回伺服端第一個未滿
+                for (var d : dests) {
+                    if (!d.full()) {
+                        target = d;
+                        break;
+                    }
+                }
+            }
+            if (target != null) {
+                ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
                 if (player != null) {
                     player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                            "pattern_upload.craft.sent", first.name()), true);
+                            "pattern_upload.craft.sent", target.name()), true);
                 }
-                LOGGER.info("[pattern_upload] craft pattern sent directly to '{}'", first.name().getString());
+                LOGGER.info("[pattern_upload] craft pattern sent directly to '{}'", target.name().getString());
             } else if (player != null) {
                 player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
                         "pattern_upload.craft.full"), true);
