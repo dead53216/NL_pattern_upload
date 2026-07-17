@@ -54,7 +54,13 @@ public final class PatternUploadClient {
                 petm.getMode() != appeng.parts.encoding.EncodingMode.PROCESSING;
     }
 
-    /** 目前樣板對應的配方類型：讀選單同步的樣板 recipe 資訊（GTOCore @GuiSync 欄位）。 */
+    /**
+     * 目前樣板對應的配方類型：讀選單同步的 GTOCore @GuiSync 欄位 gtocore$recipe。
+     * <p>
+     * GTOCore 只在「載入既有樣板」時更新此欄位，手動填格新編碼不會清 → 會殘留上一張樣板的配方
+     *（例：先編液化機、再手動編壓印器樣板，欄位仍是液化機）。因此**必須驗證**編碼格的主產物
+     * 確實是該配方 id 的產物之一；對不上即視為殘留 → 回 null（面板顯示未知、不自動上傳）。
+     */
     @Nullable
     static GTRecipeType currentRecipeType(AbstractContainerMenu menu) {
         if (isCraftMode(menu)) {
@@ -63,15 +69,58 @@ public final class PatternUploadClient {
         try {
             Object value = menu.getClass().getField("gtocore$recipe").get(menu);
             if (value instanceof String s && !s.isEmpty()) {
-                ResourceLocation rl = ResourceLocation.tryParse(s.split("/")[0]);
-                if (rl != null) {
-                    return GTRegistries.RECIPE_TYPES.get(rl);
+                ResourceLocation typeRl = ResourceLocation.tryParse(s.split("/")[0]);
+                if (typeRl == null) {
+                    return null;
                 }
+                GTRecipeType type = GTRegistries.RECIPE_TYPES.get(typeRl);
+                if (type == null) {
+                    return null;
+                }
+                return recipeMatchesPattern(menu, s) ? type : null;
             }
         } catch (Throwable ignored) {
             // GTOCore 內部欄位名變動時退回「未知」，僅影響顯示 icon，不影響功能
         }
         return null;
+    }
+
+    /** 編碼格主產物（處理模式產出槽 0）是否為 recipeId 這條配方的產物之一——防 gtocore$recipe 殘留。 */
+    private static boolean recipeMatchesPattern(AbstractContainerMenu menu, String recipeId) {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.level == null || !(menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm)) {
+                return false;
+            }
+            ResourceLocation rl = ResourceLocation.tryParse(recipeId);
+            if (rl == null) {
+                return false;
+            }
+            var opt = mc.level.getRecipeManager().byKey(rl);
+            if (opt.isEmpty()) {
+                return false;
+            }
+            Object r = opt.get(); // 避開萬用字元捕捉：先轉 Object 再 instanceof
+            if (!(r instanceof com.gregtechceu.gtceu.api.recipe.GTRecipe recipe)) {
+                return false;
+            }
+            var outSlots = petm.getProcessingOutputSlots();
+            if (outSlots.length == 0) {
+                return false;
+            }
+            net.minecraft.world.item.ItemStack out = outSlots[0].getItem();
+            if (out.isEmpty()) {
+                return false;
+            }
+            for (var content : recipe.itemOutputs) {
+                if (content.inner.test(out)) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Throwable t) {
+            return false; // 任何 API 異動/查不到 → 保守視為不匹配（改開面板讓玩家自選）
+        }
     }
 
     @Nullable

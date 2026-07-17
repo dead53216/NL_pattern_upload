@@ -55,7 +55,11 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 點目的地列 icon  → MACHINE_SELECT：指定該供應器的機器 → PatternUploadConfig.assign() 落盤 → 回清單重排
 ```
 
-- 自動機器判定：反射讀 GTOCore menu 的 `@GuiSync` 欄位 `gtocore$recipe`（`"<type_rl>/<recipe>"`），失敗退回樣板 icon（僅影響顯示與本地重排）。
+- 自動機器判定：反射讀 GTOCore menu 的 `@GuiSync` 欄位 `gtocore$recipe`（`"<type_rl>/<recipe>"`）。
+  **殘留防護**：GTOCore 只在「載入既有樣板」時更新此欄位，手動填格新編碼不會清 → 會殘留上一張的配方
+  （先編液化機、再手動編壓印器樣板，欄位仍是液化機）。故 `currentRecipeType` 會以 client `RecipeManager`
+  查該配方 id，驗編碼格主產物（處理產出槽 0）確屬其產物；對不上 → 回 null（面板顯示未知、不自動上傳）。
+  代價：純流體產物的配方（產出槽無物品）也會判不匹配 → 一律開面板（安全取捨）。
 - 供應器指定純客戶端持久化（不寫樣板 NBT、不動伺服端）；v1.1 的「寫樣板 NBT 指定機器」路徑已移除。
 
 ## 建置注意
