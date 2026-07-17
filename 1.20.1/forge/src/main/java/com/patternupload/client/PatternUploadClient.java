@@ -133,6 +133,37 @@ public final class PatternUploadClient {
             }
             return;
         }
+        // 處理樣板：有明確匹配（手動指定吻合＝tier 0 或 icon 機器類型吻合＝tier 1）→ 直傳，
+        // 不再依靠排序；找不到匹配才顯示面板讓玩家自選。
+        GTRecipeType current = currentRecipeType(screen.getMenu());
+        if (current != null) {
+            ListBoxReflector.Dest target = null;
+            for (var d : dests) {
+                if (UploadOverlay.sortTier(d, current) == 0) {
+                    target = d;
+                    break;
+                }
+            }
+            if (target == null) {
+                for (var d : dests) {
+                    if (UploadOverlay.sortTier(d, current) == 1) {
+                        target = d;
+                        break;
+                    }
+                }
+            }
+            if (target != null) {
+                overlay = null;
+                ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
+                var player = Minecraft.getInstance().player;
+                if (player != null) {
+                    player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                            "pattern_upload.sent", target.name()), true);
+                }
+                LOGGER.info("[pattern_upload] pattern sent directly to '{}' (type match)", target.name().getString());
+                return;
+            }
+        }
         overlay = new UploadOverlay(screen, dests);
         LOGGER.info("[pattern_upload] hijacked GTOCore destination list: {} entries", dests.size());
     }

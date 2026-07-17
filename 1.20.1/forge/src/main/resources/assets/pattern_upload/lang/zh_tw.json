@@ -11,5 +11,6 @@
   "pattern_upload.full": "滿",
   "pattern_upload.full.tooltip": "該目的地樣板槽已滿",
   "pattern_upload.no_machine": "未知機器",
-  "pattern_upload.search": "搜尋…"
+  "pattern_upload.search": "搜尋…",
+  "pattern_upload.sent": "樣板已上傳：%s"
 }

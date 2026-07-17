@@ -195,7 +195,7 @@ final class UploadOverlay {
      * 0 手動指定且吻合本樣板；1 icon 反查機器支援本類型；2 名稱含類型名（電路組裝機≠組裝機這種
      * 誤中放最後一層吻合）；3 無法判定；4 手動指定但不吻合；5 滿槽。
      */
-    private static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
+    static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
         if (d.full()) {
             return 5;
         }
