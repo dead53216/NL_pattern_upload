@@ -2,6 +2,8 @@
   "mod.pattern_upload": "Pattern Upload",
   "pattern_upload.assign.clear": "清除指定",
   "pattern_upload.assign.tooltip": "点击指定此供应器对应的机器（接口贴子网时用）",
+  "pattern_upload.craft.full": "分子装配室/装配矩阵全满，未上传",
+  "pattern_upload.craft.sent": "合成样板已上传：%s",
   "pattern_upload.craft.title": "合成样板（分子装配室/装配矩阵）",
   "pattern_upload.dup.warn": "同名供应器会共用指定；要分开请先改名",
   "pattern_upload.empty": "没有可用的目的地",

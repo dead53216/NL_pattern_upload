@@ -102,6 +102,25 @@ public final class PatternUploadClient {
             return; // 反射失敗：保留 GTOCore 原清單
         }
         box.setVisible(false);
+        if (isCraftMode(screen.getMenu())) {
+            // 合成/鍛造/切石樣板：只有分子裝配室/裝配矩陣能做（伺服端 gto$craftFirst 已排最前），
+            // 不開面板直接上傳第一個目的地；第一個就滿＝沒空位 → 停止動作
+            overlay = null;
+            var player = Minecraft.getInstance().player;
+            if (!dests.isEmpty() && !dests.get(0).full()) {
+                var first = dests.get(0);
+                ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(first.index());
+                if (player != null) {
+                    player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                            "pattern_upload.craft.sent", first.name()), true);
+                }
+                LOGGER.info("[pattern_upload] craft pattern sent directly to '{}'", first.name().getString());
+            } else if (player != null) {
+                player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                        "pattern_upload.craft.full"), true);
+            }
+            return;
+        }
         overlay = new UploadOverlay(screen, dests);
         LOGGER.info("[pattern_upload] hijacked GTOCore destination list: {} entries", dests.size());
     }

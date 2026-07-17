@@ -2,6 +2,8 @@
   "mod.pattern_upload": "Pattern Upload",
   "pattern_upload.assign.clear": "Clear assignment",
   "pattern_upload.assign.tooltip": "Click to assign the machine this provider serves (for subnet interfaces)",
+  "pattern_upload.craft.full": "All molecular assemblers / assembler matrices are full, nothing sent",
+  "pattern_upload.craft.sent": "Crafting pattern sent to: %s",
   "pattern_upload.craft.title": "Crafting pattern (molecular assembler / assembler matrix)",
   "pattern_upload.dup.warn": "Same-named providers share this assignment; rename them to separate",
   "pattern_upload.empty": "No destinations available",
