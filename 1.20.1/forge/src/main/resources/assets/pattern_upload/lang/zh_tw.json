@@ -3,6 +3,7 @@
   "pattern_upload.assign.clear": "清除指定",
   "pattern_upload.assign.tooltip": "點擊指定此供應器對應的機器（接口貼子網時用）",
   "pattern_upload.craft.full": "分子裝配室/裝配矩陣全滿，未上傳",
+  "pattern_upload.craft.none": "網路上沒有分子裝配室/裝配矩陣，未上傳",
   "pattern_upload.craft.sent": "合成樣板已上傳：%s",
   "pattern_upload.craft.title": "合成樣板（分子裝配室/裝配矩陣）",
   "pattern_upload.dup.warn": "同名供應器會共用指定；要分開請先改名",

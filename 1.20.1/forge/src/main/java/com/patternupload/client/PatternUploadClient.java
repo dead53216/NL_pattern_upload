@@ -108,20 +108,12 @@ public final class PatternUploadClient {
             // 所以客戶端自己以 icon 認合成容器：挑第一個未滿的合成容器直傳；全滿 → 停止動作。
             overlay = null;
             var player = Minecraft.getInstance().player;
+            // 只允許分子裝配室/裝配矩陣；其他供應器一律不上傳（沒有保底）
             ListBoxReflector.Dest target = null;
             boolean sawCraftContainer = false;
             for (var d : dests) {
                 if (RecipeTypeIcons.isCraftContainer(d.icon())) {
                     sawCraftContainer = true;
-                    if (!d.full()) {
-                        target = d;
-                        break;
-                    }
-                }
-            }
-            if (!sawCraftContainer) {
-                // 一台合成容器都認不出（icon 異動或改名成自訂圖示）→ 退回伺服端第一個未滿
-                for (var d : dests) {
                     if (!d.full()) {
                         target = d;
                         break;
@@ -137,7 +129,7 @@ public final class PatternUploadClient {
                 LOGGER.info("[pattern_upload] craft pattern sent directly to '{}'", target.name().getString());
             } else if (player != null) {
                 player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                        "pattern_upload.craft.full"), true);
+                        sawCraftContainer ? "pattern_upload.craft.full" : "pattern_upload.craft.none"), true);
             }
             return;
         }
