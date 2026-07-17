@@ -197,26 +197,19 @@ public final class PatternUploadClient {
             }
             return;
         }
-        // 處理樣板：有明確匹配（手動指定吻合＝tier 0 或 icon 機器類型吻合＝tier 1）→ 直傳，
-        // 不再依靠排序；找不到匹配才顯示面板讓玩家自選。
+        // 處理樣板：收集所有「明確匹配」的目的地（tier 0 手動指定吻合 / tier 1 機器類型吻合）。
+        // 剛好一個 → 直傳；多個 → 開面板讓玩家自選（不亂猜）；零個 → 開面板。
         GTRecipeType current = currentRecipeType(screen.getMenu());
         if (current != null) {
-            ListBoxReflector.Dest target = null;
+            List<ListBoxReflector.Dest> matches = new java.util.ArrayList<>();
             for (var d : dests) {
-                if (UploadOverlay.sortTier(d, current) == 0) {
-                    target = d;
-                    break;
+                int tier = UploadOverlay.sortTier(d, current);
+                if (tier == 0 || tier == 1) {
+                    matches.add(d);
                 }
             }
-            if (target == null) {
-                for (var d : dests) {
-                    if (UploadOverlay.sortTier(d, current) == 1) {
-                        target = d;
-                        break;
-                    }
-                }
-            }
-            if (target != null) {
+            if (matches.size() == 1) {
+                ListBoxReflector.Dest target = matches.get(0);
                 overlay = null;
                 ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
                 var player = Minecraft.getInstance().player;
@@ -225,8 +218,11 @@ public final class PatternUploadClient {
                     player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
                             "pattern_upload.sent", target.name()), false);
                 }
-                LOGGER.info("[pattern_upload] pattern sent directly to '{}' (type match)", target.name().getString());
+                LOGGER.info("[pattern_upload] pattern sent directly to '{}' (single type match)", target.name().getString());
                 return;
+            }
+            if (matches.size() > 1) {
+                LOGGER.info("[pattern_upload] {} matches → open panel for user choice", matches.size());
             }
         }
         overlay = new UploadOverlay(screen, dests);
