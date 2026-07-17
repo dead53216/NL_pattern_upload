@@ -60,8 +60,9 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   （可能是**別台機器**：壓印器樣板殘留成液化機；也可能是**同機器別條配方**：組裝機樣板殘留成 disassembly）。
   故 `currentRecipeType` 不比對精確 recipe id，改看「**該類型的任一配方**是否產出編碼格產物」：
   以 `GTRecipeType.recipes`（gtceu 同步到 client 的表，**非**原版 RecipeManager，後者查不到 gtceu 配方）
-  逐條比 `itemOutputs` 對編碼格產出槽物品。對不上 → 回 null（面板顯示未知、不自動上傳）。
-  代價：純流體產物的配方（產出槽無物品）也會判不匹配 → 一律開面板（安全取捨）。
+  逐條比 `itemOutputs`／`fluidOutputs` 對編碼格產出物。對不上 → 回 null（面板顯示未知、不自動上傳）。
+  流體產物在 FakeSlot 是包成 wrapper item，用公開 API `GenericStack.unwrapItemStack` 解出 fluid key
+  （不反射 private `encodedOutputsInv`——其欄位名正式包 reobf 後會 SRG 失配），以 `testAeKay` 比對。
 - 供應器指定純客戶端持久化（不寫樣板 NBT、不動伺服端）；v1.1 的「寫樣板 NBT 指定機器」路徑已移除。
 
 ## 建置注意

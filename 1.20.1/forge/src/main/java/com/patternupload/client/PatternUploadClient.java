@@ -98,23 +98,35 @@ public final class PatternUploadClient {
             if (!(menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm)) {
                 return false;
             }
-            // 先收集編碼格所有非空產出物（處理模式產出槽）
-            java.util.List<net.minecraft.world.item.ItemStack> outs = new java.util.ArrayList<>();
+            // 收集編碼格所有非空產出物的 AEKey（物品或流體）。
+            // 流體產物在 FakeSlot 是包成 wrapper item，用公開 API GenericStack.unwrapItemStack 解出
+            //（避免反射 private encodedOutputsInv——其欄位名在正式包會被 reobf 成 SRG）。
+            java.util.List<appeng.api.stacks.AEKey> keys = new java.util.ArrayList<>();
             for (var slot : petm.getProcessingOutputSlots()) {
                 net.minecraft.world.item.ItemStack st = slot.getItem();
-                if (!st.isEmpty()) {
-                    outs.add(st);
+                if (st.isEmpty()) {
+                    continue;
                 }
+                appeng.api.stacks.GenericStack gs = appeng.api.stacks.GenericStack.unwrapItemStack(st);
+                keys.add(gs != null ? gs.what() : appeng.api.stacks.AEItemKey.of(st));
             }
-            if (outs.isEmpty()) {
+            if (keys.isEmpty()) {
                 return false;
             }
-            // 該類型任一配方的 itemOutputs 命中任一產出物即算匹配
+            // 該類型任一配方的 item/fluid Outputs 命中任一產出物即算匹配
             for (var def : type.recipes.values()) {
-                for (var content : def.itemOutputs) {
-                    for (var out : outs) {
-                        if (content.inner.test(out)) {
-                            return true;
+                for (var key : keys) {
+                    if (key instanceof appeng.api.stacks.AEItemKey ik) {
+                        for (var content : def.itemOutputs) {
+                            if (content.inner.testAeKay(ik)) {
+                                return true;
+                            }
+                        }
+                    } else if (key instanceof appeng.api.stacks.AEFluidKey fk) {
+                        for (var content : def.fluidOutputs) {
+                            if (content.inner.testAeKay(fk)) {
+                                return true;
+                            }
                         }
                     }
                 }
