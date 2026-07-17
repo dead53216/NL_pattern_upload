@@ -123,13 +123,14 @@ public final class PatternUploadClient {
             if (target != null) {
                 ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
                 if (player != null) {
+                    // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）
                     player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                            "pattern_upload.craft.sent", target.name()), true);
+                            "pattern_upload.craft.sent", target.name()), false);
                 }
                 LOGGER.info("[pattern_upload] craft pattern sent directly to '{}'", target.name().getString());
             } else if (player != null) {
                 player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                        sawCraftContainer ? "pattern_upload.craft.full" : "pattern_upload.craft.none"), true);
+                        sawCraftContainer ? "pattern_upload.craft.full" : "pattern_upload.craft.none"), false);
             }
             return;
         }
@@ -157,8 +158,9 @@ public final class PatternUploadClient {
                 ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
                 var player = Minecraft.getInstance().player;
                 if (player != null) {
+                    // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）
                     player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                            "pattern_upload.sent", target.name()), true);
+                            "pattern_upload.sent", target.name()), false);
                 }
                 LOGGER.info("[pattern_upload] pattern sent directly to '{}' (type match)", target.name().getString());
                 return;
