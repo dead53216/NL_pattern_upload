@@ -77,7 +77,7 @@ public final class PatternUploadClient {
                 if (type == null) {
                     return null;
                 }
-                return recipeMatchesPattern(menu, s) ? type : null;
+                return typeProducesPatternOutput(menu, type) ? type : null;
             }
         } catch (Throwable ignored) {
             // GTOCore 內部欄位名變動時退回「未知」，僅影響顯示 icon，不影響功能
@@ -85,36 +85,38 @@ public final class PatternUploadClient {
         return null;
     }
 
-    /** 編碼格主產物（處理模式產出槽 0）是否為 recipeId 這條配方的產物之一——防 gtocore$recipe 殘留。 */
-    private static boolean recipeMatchesPattern(AbstractContainerMenu menu, String recipeId) {
+    /**
+     * 判定 type 這台機器是否真能做出「編碼格的主產物」——防 gtocore$recipe 殘留。
+     * <p>
+     * gtocore$recipe 只在載入既有樣板時更新，殘留的可能是**別的機器**（壓印器樣板殘留成液化機）
+     * 或**同機器別條配方**（組裝機樣板殘留成 disassembly），故不比對精確 recipe id，
+     * 改看「該類型的<b>任一</b>配方」是否產出此樣板產物。gtceu 配方不在原版 client RecipeManager，
+     * 查 {@code GTRecipeType.recipes}（gtceu 同步到 client 的表）。
+     */
+    private static boolean typeProducesPatternOutput(AbstractContainerMenu menu, GTRecipeType type) {
         try {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.level == null || !(menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm)) {
+            if (!(menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm)) {
                 return false;
             }
-            ResourceLocation rl = ResourceLocation.tryParse(recipeId);
-            if (rl == null) {
+            // 先收集編碼格所有非空產出物（處理模式產出槽）
+            java.util.List<net.minecraft.world.item.ItemStack> outs = new java.util.ArrayList<>();
+            for (var slot : petm.getProcessingOutputSlots()) {
+                net.minecraft.world.item.ItemStack st = slot.getItem();
+                if (!st.isEmpty()) {
+                    outs.add(st);
+                }
+            }
+            if (outs.isEmpty()) {
                 return false;
             }
-            var opt = mc.level.getRecipeManager().byKey(rl);
-            if (opt.isEmpty()) {
-                return false;
-            }
-            Object r = opt.get(); // 避開萬用字元捕捉：先轉 Object 再 instanceof
-            if (!(r instanceof com.gregtechceu.gtceu.api.recipe.GTRecipe recipe)) {
-                return false;
-            }
-            var outSlots = petm.getProcessingOutputSlots();
-            if (outSlots.length == 0) {
-                return false;
-            }
-            net.minecraft.world.item.ItemStack out = outSlots[0].getItem();
-            if (out.isEmpty()) {
-                return false;
-            }
-            for (var content : recipe.itemOutputs) {
-                if (content.inner.test(out)) {
-                    return true;
+            // 該類型任一配方的 itemOutputs 命中任一產出物即算匹配
+            for (var def : type.recipes.values()) {
+                for (var content : def.itemOutputs) {
+                    for (var out : outs) {
+                        if (content.inner.test(out)) {
+                            return true;
+                        }
+                    }
                 }
             }
             return false;
