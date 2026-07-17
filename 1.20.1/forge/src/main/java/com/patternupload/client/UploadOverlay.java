@@ -23,7 +23,6 @@ import org.lwjgl.glfw.GLFW;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * 上傳介面 overlay：由 ScreenEvent 疊加在樣板編碼終端上。
@@ -191,9 +190,8 @@ final class UploadOverlay {
     }
 
     /**
-     * 目的地排序層級（越小越前）：
-     * 0 手動指定且吻合本樣板；1 icon 反查機器支援本類型；2 名稱含類型名（電路組裝機≠組裝機這種
-     * 誤中放最後一層吻合）；3 無法判定；4 手動指定但不吻合；5 滿槽。
+     * 目的地排序層級（越小越前），0/1 視為「明確匹配」可自動上傳：
+     * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型；3 無法判定；4 手動指定但不吻合；5 滿槽。
      */
     static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
         if (d.full()) {
@@ -211,9 +209,9 @@ final class UploadOverlay {
                 }
             }
         }
-        String typeName = RecipeTypeIcons.name(current).getString().toLowerCase(Locale.ROOT);
-        if (!typeName.isEmpty() && d.name().getString().toLowerCase(Locale.ROOT).contains(typeName)) {
-            return 2;
+        // 通用工廠等 icon 不帶子機器者：靠供應器名稱裡最長機器名判定（最長匹配避免子字串誤中）
+        if (RecipeTypeIcons.nameMachineSupports(d.name().getString(), current)) {
+            return 1;
         }
         return 3;
     }

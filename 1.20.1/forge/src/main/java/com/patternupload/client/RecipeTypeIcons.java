@@ -30,6 +30,10 @@ public final class RecipeTypeIcons {
     private static Map<GTRecipeType, ItemStack> iconCache;
     private static Map<Item, Set<GTRecipeType>> typesByItem;
     private static List<GTRecipeType> sortedTypes;
+    /** 機器本地化名稱 → 其支援的配方類型（供應器名稱比對用；ProcessingPlantMachine 通用工廠靠這辨識子機器）。 */
+    private static List<MachineName> machineNames;
+
+    private record MachineName(String name, Set<GTRecipeType> types) {}
 
     private RecipeTypeIcons() {}
 
@@ -39,21 +43,52 @@ public final class RecipeTypeIcons {
         }
         iconCache = new HashMap<>();
         typesByItem = new HashMap<>();
+        Map<String, Set<GTRecipeType>> byName = new HashMap<>();
         for (MachineDefinition def : GTRegistries.MACHINES.values()) {
             GTRecipeType[] types = def.getRecipeTypes();
             if (types == null) {
                 continue;
             }
             ItemStack stack = def.asStack();
+            String hoverName = stack.getHoverName().getString();
             for (GTRecipeType type : types) {
                 if (type != null) {
                     // 註冊順序大致由低階到高階，保留最先出現的機器當代表
                     iconCache.putIfAbsent(type, stack);
                     // 反向表：機器物品 → 支援的配方類型（本地排序用）
                     typesByItem.computeIfAbsent(stack.getItem(), i -> new HashSet<>()).add(type);
+                    if (!hoverName.isBlank()) {
+                        byName.computeIfAbsent(hoverName, n -> new HashSet<>()).add(type);
+                    }
                 }
             }
         }
+        machineNames = new ArrayList<>();
+        byName.forEach((n, t) -> machineNames.add(new MachineName(n, t)));
+    }
+
+    /**
+     * 供應器顯示名稱裡「最長的機器名」是否支援 current 類型。
+     * 用最長匹配避開子字串嵌套誤判：「電路組裝機」供應器不會誤中「組裝機」型；
+     * 「通用工廠 - 進階流體固化器」會命中進階流體固化器（其支援流體固化器型）。
+     */
+    public static boolean nameMachineSupports(String destName, GTRecipeType current) {
+        buildCache();
+        MachineName best = null;
+        for (MachineName m : machineNames) {
+            if (destName.contains(m.name) && (best == null || m.name.length() > best.name.length())) {
+                best = m;
+            }
+        }
+        if (best == null) {
+            return false;
+        }
+        for (GTRecipeType t : best.types) {
+            if (matchesType(t, current)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
