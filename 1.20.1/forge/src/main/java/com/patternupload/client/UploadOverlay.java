@@ -232,6 +232,11 @@ final class UploadOverlay {
         return heightFor(maxRows);
     }
 
+    /** 面板畫面矩形 {x, y, w, h}（供 EMI 排除區把右側物品擠開）。 */
+    int[] bounds() {
+        return new int[] { x, y, w, panelHeight() };
+    }
+
     private boolean craftMode() {
         return PatternUploadClient.isCraftMode(screen.getMenu());
     }

@@ -64,6 +64,8 @@ repositories {
             artifact()
         }
     }
+    // EMI（排除區 API；軟依賴，runtime 由整合包提供）
+    maven { url = 'https://maven.terraformersmc.com/releases' }
 }
 
 dependencies {
@@ -84,6 +86,8 @@ dependencies {
     compileOnly fg.deobf("appeng:appliedenergistics2-forge-1.20.1:${ae2_version}")
     // GTCEu(gto) 的 registry 基類所在函式庫（僅編譯期型別解析用）
     compileOnly "com.gto:datasynclib-forge-1.20.1:${datasynclib_version}"
+    // EMI 排除區 API（軟依賴，缺席時 plugin 類不被 EMI 載入 → 無害）
+    compileOnly "dev.emi:emi-forge:${emi_version}"
 }
 
 mixin {

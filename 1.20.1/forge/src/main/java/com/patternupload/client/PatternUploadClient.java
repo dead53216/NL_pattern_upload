@@ -45,6 +45,12 @@ public final class PatternUploadClient {
         overlay = null;
     }
 
+    /** 目前 overlay 面板的畫面矩形 {x, y, w, h}；沒開面板回 null（供 EMI 排除區用）。 */
+    @Nullable
+    public static int[] activePanelBounds() {
+        return overlay != null ? overlay.bounds() : null;
+    }
+
     /**
      * 非處理樣板（合成/鍛造/切石）只有分子裝配室或裝配矩陣能做，
      * 配方類型概念不適用；伺服端 gto$craftFirst 已把合成容器排前，本地不要再動。

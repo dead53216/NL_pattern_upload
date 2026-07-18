@@ -42,6 +42,7 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 | `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器名稱→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器以顯示名稱為鍵（改名即獨立身分，同名共用） |
 | `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
+| `compat/emi/PatternUploadEmiPlugin` | EMI 排除區（`@EmiEntrypoint`，軟依賴）：把面板矩形註冊給 EMI，右側物品自動避開；EMI 缺席時此類不被載入 |
 
 `/patternupload_test`：30 秒內開啟樣板編碼終端即注入假目的地，驗證整條劫持鏈。
 
