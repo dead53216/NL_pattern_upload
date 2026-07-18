@@ -231,7 +231,8 @@ public final class PatternUploadClient {
 
     // ------------------------------------------------------------- 事件疊加
 
-    @SubscribeEvent
+    // LOWEST：Render.Post 監聽器最後執行 → 面板最後畫 → 置頂蓋過 EMI/JEI 的右側物品
+    @SubscribeEvent(priority = net.minecraftforge.eventbus.api.EventPriority.LOWEST)
     public static void onRender(ScreenEvent.Render.Post event) {
         var o = activeOverlay(event);
         if (o != null) {
@@ -239,7 +240,8 @@ public final class PatternUploadClient {
         }
     }
 
-    @SubscribeEvent
+    // HIGHEST：點擊 Pre 最先執行 → 面板先吃掉點擊並取消，EMI 不會搶走
+    @SubscribeEvent(priority = net.minecraftforge.eventbus.api.EventPriority.HIGHEST)
     public static void onMouseClick(ScreenEvent.MouseButtonPressed.Pre event) {
         var o = activeOverlay(event);
         if (o != null && o.mouseClicked(event.getMouseX(), event.getMouseY(), event.getButton())) {
