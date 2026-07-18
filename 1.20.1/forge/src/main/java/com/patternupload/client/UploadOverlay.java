@@ -43,6 +43,8 @@ final class UploadOverlay {
 
     private static final int ROW_H = 18;
     private static final int HEADER_H = 18;
+    /** 底部狀態列（放已選提示、捲動位置、警告）高度；獨立一條，不與列表重疊。 */
+    private static final int FOOTER_H = 12;
     private static final int DEFAULT_W = 150;
     private static final int DEFAULT_ROWS = 6;
     private static final int MIN_W = 120;
@@ -255,7 +257,7 @@ final class UploadOverlay {
     }
 
     private static int heightFor(int rowCount) {
-        return HEADER_H + 2 + rowCount * ROW_H + 4;
+        return HEADER_H + 2 + rowCount * ROW_H + FOOTER_H;
     }
 
     private int panelHeight() {
@@ -434,7 +436,7 @@ final class UploadOverlay {
             // 以左上角為錨點，拖右下角改寬與列數
             w = clamp((int) mx - x, MIN_W, MAX_W);
             int targetH = (int) my - y;
-            maxRows = clamp(Math.round((targetH - HEADER_H - 6) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
+            maxRows = clamp(Math.round((targetH - HEADER_H - 2 - FOOTER_H) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
             searchBox.setWidth(w - 34);
             rebuildRows();
             return true;
