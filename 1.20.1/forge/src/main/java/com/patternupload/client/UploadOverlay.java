@@ -302,11 +302,17 @@ final class UploadOverlay {
         g.fill(x + w - 8, y + h - 2, x + w - 1, y + h - 1, gripColor);
         g.fill(x + w - 2, y + h - 8, x + w - 1, y + h - 1, gripColor);
 
-        // header：樣板機器 icon（左，拖曳把手）+ 搜尋欄（中，hint = 機器名）+ 關閉鈕（右）
+        // header：樣板機器 icon（左，拖曳把手）+ 搜尋欄／機器名（中）+ 關閉鈕（右）
         g.renderItem(headerIcon(), x + 2, y + 1);
         g.fill(x + 20, y + 2, x + w - 12, y + HEADER_H - 2, 0x40000000); // 搜尋欄底色
-        searchBox.setHint(headerTitle()); // 空白時顯示機器名／模式標題
-        searchBox.render(g, mouseX, mouseY, partialTick);
+        if (searchBox.isFocused() || !searchBox.getValue().isEmpty()) {
+            // 聚焦或有輸入 → 顯示可編輯搜尋欄
+            searchBox.render(g, mouseX, mouseY, partialTick);
+        } else {
+            // 未搜尋 → 該列當標題，亮白顯示機器名／模式標題（點一下即變搜尋欄）
+            String t = font.plainSubstrByWidth(headerTitle().getString(), w - 21 - 13);
+            g.drawString(font, t, x + 21, y + 5, 0xFFFFFF);
+        }
         boolean closeHover = isOverClose(mouseX, mouseY);
         g.drawString(font, "✕", x + w - 10, y + 5, closeHover ? 0xFF5555 : 0xAAAAAA);
 
