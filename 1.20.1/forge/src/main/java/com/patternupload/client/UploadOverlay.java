@@ -362,15 +362,20 @@ final class UploadOverlay {
         if (rows.isEmpty()) {
             g.drawString(font, Component.translatable("pattern_upload.empty").getString(), x + 6, top + 4, 0x888888);
         }
+        int bottomY = y + h - 11;
+        int hintRight = x + w - 5; // 底列提示可用的右界（有捲動指示時往左讓位，避免文字重疊）
         if (rows.size() > maxRows) {
             String pos = (scrollOff + 1) + "-" + Math.min(scrollOff + maxRows, rows.size()) + "/" + rows.size();
-            g.drawString(font, pos, x + w - 12 - font.width(pos), y + h - 11, 0x888888);
+            int posX = x + w - 12 - font.width(pos);
+            g.drawString(font, pos, posX, bottomY, 0x888888);
+            hintRight = posX - 4;
         }
         if (mode == Mode.DESTINATIONS && !selected.isEmpty()) {
-            // 中鍵多選提示：已選數量＋再中鍵批次上傳
+            // 右鍵多選提示：已選數量＋左鍵批次上傳（寬度截到捲動指示前，兩者不重疊）
             String hint = font.plainSubstrByWidth(
-                    Component.translatable("pattern_upload.batch.hint", selected.size()).getString(), w - 40);
-            g.drawString(font, hint, x + 5, y + h - 11, 0x55EE55);
+                    Component.translatable("pattern_upload.batch.hint", selected.size()).getString(),
+                    Math.max(20, hintRight - (x + 5)));
+            g.drawString(font, hint, x + 5, bottomY, 0x55EE55);
         }
         if (mode == Mode.MACHINE_SELECT && selectingDup) {
             // 同名供應器共用指定（客戶端只拿得到名稱，分不出實體）——提醒玩家先改名
