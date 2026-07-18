@@ -473,20 +473,16 @@ final class UploadOverlay {
         }
         searchBox.setFocused(false);
 
-        // 中鍵：多選高亮 / 再中鍵已選列 = 批次上傳所有已選（各扣一張樣板，伺服端 sendPattern 自理）
-        if (button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE && mode == Mode.DESTINATIONS && !craftMode()) {
+        // 右鍵：多選高亮切換（滿槽不選）。左鍵上傳時：有多選 → 批次上傳全部已選，無多選 → 傳點擊列。
+        if (button == GLFW.GLFW_MOUSE_BUTTON_RIGHT && mode == Mode.DESTINATIONS && !craftMode()) {
             int mi = rowIndexAt(mx, my);
             if (mi >= 0) {
                 Row row = rows.get(mi);
-                if (!row.full()) {
-                    if (selected.contains(row.destIndex())) {
-                        batchUpload();
-                    } else {
-                        selected.add(row.destIndex());
-                    }
+                if (!row.full() && !selected.remove(row.destIndex())) {
+                    selected.add(row.destIndex());
                 }
             }
-            return true; // 面板內中鍵一律吃掉，避免誤觸終端（中鍵取物）
+            return true; // 面板內右鍵一律吃掉，避免誤觸終端
         }
 
         if (isOverResizeGrip(mx, my)) {
@@ -508,7 +504,7 @@ final class UploadOverlay {
             return true;
         }
         int idx = rowIndexAt(mx, my);
-        if (idx >= 0) {
+        if (idx >= 0 && button == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
             Row row = rows.get(idx);
             if (mode == Mode.DESTINATIONS) {
                 int ry = rowsTop() + (idx - scrollOff) * ROW_H;
@@ -521,6 +517,9 @@ final class UploadOverlay {
                     searchBox.setValue("");
                     scrollOff = 0;
                     rebuildRows();
+                } else if (!selected.isEmpty()) {
+                    // 有多選 → 左鍵批次上傳全部已選（不論點在哪列）
+                    batchUpload();
                 } else if (!row.full()) {
                     ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(row.destIndex());
                     var player = Minecraft.getInstance().player;

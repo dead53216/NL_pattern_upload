@@ -2,7 +2,7 @@
   "mod.pattern_upload": "Pattern Upload",
   "pattern_upload.assign.clear": "Clear assignment",
   "pattern_upload.assign.tooltip": "Click to assign the machine this provider serves (for subnet interfaces)",
-  "pattern_upload.batch.hint": "%s selected · middle-click to upload",
+  "pattern_upload.batch.hint": "%s selected · left-click to upload",
   "pattern_upload.batch.sent": "Batch uploaded to %s destination(s)",
   "pattern_upload.craft.full": "All molecular assemblers / assembler matrices are full, nothing sent",
   "pattern_upload.craft.none": "No molecular assembler / assembler matrix on the network, nothing sent",
