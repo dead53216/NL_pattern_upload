@@ -43,7 +43,6 @@ final class UploadOverlay {
 
     private static final int ROW_H = 18;
     private static final int HEADER_H = 18;
-    private static final int SEARCH_H = 14;
     private static final int DEFAULT_W = 150;
     private static final int DEFAULT_ROWS = 6;
     private static final int MIN_W = 120;
@@ -97,9 +96,10 @@ final class UploadOverlay {
         } else {
             defaultPosition();
         }
-        this.searchBox = new EditBox(this.font, x + 4, y + HEADER_H, w - 8, SEARCH_H - 2, Component.empty());
+        // 搜尋欄併入標題列：icon（左，拖曳把手）＋搜尋欄（中）＋關閉鈕（右）；機器名以 hint 呈現。
+        this.searchBox = new EditBox(this.font, x + 21, y + 3, w - 34, 12, Component.empty());
         this.searchBox.setMaxLength(64);
-        this.searchBox.setBordered(true);
+        this.searchBox.setBordered(false);
         this.searchBox.setHint(Component.translatable("pattern_upload.search"));
         this.searchBox.setResponder(s -> rebuildRows());
         rebuildRows();
@@ -251,11 +251,11 @@ final class UploadOverlay {
     }
 
     private int rowsTop() {
-        return y + HEADER_H + SEARCH_H + 2;
+        return y + HEADER_H + 2;
     }
 
     private static int heightFor(int rowCount) {
-        return HEADER_H + SEARCH_H + 4 + rowCount * ROW_H + 4;
+        return HEADER_H + 2 + rowCount * ROW_H + 4;
     }
 
     private int panelHeight() {
@@ -302,14 +302,13 @@ final class UploadOverlay {
         g.fill(x + w - 8, y + h - 2, x + w - 1, y + h - 1, gripColor);
         g.fill(x + w - 2, y + h - 8, x + w - 1, y + h - 1, gripColor);
 
-        // header：樣板機器 icon（顯示用）+ 標題 + 關閉鈕
+        // header：樣板機器 icon（左，拖曳把手）+ 搜尋欄（中，hint = 機器名）+ 關閉鈕（右）
         g.renderItem(headerIcon(), x + 2, y + 1);
-        String title = font.plainSubstrByWidth(headerTitle().getString(), w - 21 - 13);
-        g.drawString(font, title, x + 21, y + 5, 0xFFFFFF);
+        g.fill(x + 20, y + 2, x + w - 12, y + HEADER_H - 2, 0x40000000); // 搜尋欄底色
+        searchBox.setHint(headerTitle()); // 空白時顯示機器名／模式標題
+        searchBox.render(g, mouseX, mouseY, partialTick);
         boolean closeHover = isOverClose(mouseX, mouseY);
         g.drawString(font, "✕", x + w - 10, y + 5, closeHover ? 0xFF5555 : 0xAAAAAA);
-
-        searchBox.render(g, mouseX, mouseY, partialTick);
 
         // rows
         int top = rowsTop();
@@ -414,9 +413,9 @@ final class UploadOverlay {
         return mx >= x + w - 12 && mx < x + w && my >= y + h - 12 && my < y + h;
     }
 
-    /** 標題列空白處（扣掉右關閉鈕）= 拖曳把手。 */
+    /** 標題列最左 icon 區 = 拖曳把手（中間是搜尋欄、右邊是關閉鈕，都不可拖）。 */
     private boolean isOverDragHandle(double mx, double my) {
-        return mx >= x && mx < x + w - 14 && my >= y && my < y + HEADER_H;
+        return mx >= x && mx < x + 20 && my >= y && my < y + HEADER_H;
     }
 
     /** 目的地列最左 icon 區（點擊 = 指定該供應器的機器）。 */
@@ -429,8 +428,8 @@ final class UploadOverlay {
             // 以左上角為錨點，拖右下角改寬與列數
             w = clamp((int) mx - x, MIN_W, MAX_W);
             int targetH = (int) my - y;
-            maxRows = clamp(Math.round((targetH - HEADER_H - SEARCH_H - 8) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
-            searchBox.setWidth(w - 8);
+            maxRows = clamp(Math.round((targetH - HEADER_H - 6) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
+            searchBox.setWidth(w - 34);
             rebuildRows();
             return true;
         }
@@ -439,8 +438,8 @@ final class UploadOverlay {
         }
         x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - w));
         y = Math.max(0, Math.min((int) my - dragOffY, screen.height - 40));
-        searchBox.setX(x + 4);
-        searchBox.setY(y + HEADER_H);
+        searchBox.setX(x + 21);
+        searchBox.setY(y + 3);
         return true;
     }
 
