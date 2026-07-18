@@ -25,8 +25,9 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   **除分子裝配室/裝配矩陣外一律取消上傳**（沒有保底）：認不到 → 「網路上沒有…」、全滿 → 「全滿」。
 - 供應器被指定後：icon 換成指定的機器，文字＝「機器名（dest.name）」。括號一律放 GTOCore 給的清單標籤
   （沒改名照放；供應器改名後 GTOCore 自動給自訂名 → 括號顯示自訂名，可分辨同名供應器）。
-- 面板可拖曳（標題列）、**右下角把手可縮放**（寬 120–280、3–12 列，左上角為錨點；高度固定跟 maxRows，列不足留空白）；位置與尺寸持久化於同一 config。
-- 預設位置：合成欄（3x3 編碼格）右邊（`PatternEncodingTermMenu.getCraftingGridSlots()` 取座標，取不到退回 GUI 右側）。
+- **頁面式**：面板填滿終端 GUI 矩形（`getGuiLeft/getGuiTop/getXSize/getYSize`），像切換到「目的地頁」覆在終端上。
+  因落在 AE2 GUI 範圍內，EMI/JEI 右側物品本就避開該區 → 不重疊、不彈出到外面（不需自寫 EMI 排除區）。
+  列數依 GUI 高度自動算；不再拖曳/縮放/記位置。
 - ESC：MACHINE_SELECT → 回清單 → 關 overlay → 關終端；搜尋欄聚焦時吞按鍵避免 `E` 關閉介面。
 
 ## 架構（1.20.1/forge）— v1.1「零 mixin 劫持」
@@ -38,11 +39,10 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 |---|---|
 | `client/PatternUploadClient` | `ScreenEvent.Render.Pre` 輪詢 `term.gto$getPatternDestDisplay()`；`isVisible()` 一變 true → 反射抽資料 → `setVisible(false)` 藏原框 → 開 overlay。另掛 Render.Post/滑鼠/鍵盤/拖曳/Closing 事件 |
 | `client/ListBoxReflector` | 反射讀 `AESearchPatternProviderListBox.allItems`（SimpleItem: index/icon/name/full；已對照 0.5.6-alpha/beta/26.7.x），失敗自動退回原介面 |
-| `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、標題列拖曳、右下角縮放、本地重排 |
+| `client/UploadOverlay` | 面板本體（純類）：填滿終端 GUI 的頁面、兩模式清單、搜尋、hover/tooltip、捲動、本地重排 |
 | `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器名稱→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器以顯示名稱為鍵（改名即獨立身分，同名共用） |
 | `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
-| `compat/emi/PatternUploadEmiPlugin` | EMI 排除區（`@EmiEntrypoint`，軟依賴）：把面板矩形註冊給 EMI，右側物品自動避開；EMI 缺席時此類不被載入 |
 
 `/patternupload_test`：30 秒內開啟樣板編碼終端即注入假目的地，驗證整條劫持鏈。
 

@@ -9,14 +9,12 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
 import appeng.api.client.AEKeyRendering;
 import appeng.api.stacks.AEKey;
 
 import appeng.client.gui.me.items.PatternEncodingTermScreen;
-import appeng.menu.me.items.PatternEncodingTermMenu;
 
 import org.lwjgl.glfw.GLFW;
 
@@ -42,10 +40,6 @@ final class UploadOverlay {
     private static final int ROW_H = 16;
     private static final int HEADER_H = 18;
     private static final int SEARCH_H = 14;
-    private static final int DEFAULT_W = 150;
-    private static final int DEFAULT_ROWS = 6;
-    private static final int MIN_W = 120;
-    private static final int MAX_W = 280;
     private static final int MIN_ROWS = 3;
     private static final int MAX_ROWS_LIMIT = 12;
     /** MACHINE_SELECT 清單裡「清除指定」列的 destIndex 哨兵值。 */
@@ -59,10 +53,6 @@ final class UploadOverlay {
     private int y;
     private int w;
     private int maxRows;
-    private boolean dragging = false;
-    private boolean resizing = false;
-    private int dragOffX;
-    private int dragOffY;
 
     private Mode mode = Mode.DESTINATIONS;
     /** MACHINE_SELECT 模式的目標供應器名稱（config 的鍵）。 */
@@ -79,54 +69,17 @@ final class UploadOverlay {
         this.screen = screen;
         this.destinations = destinations;
         this.font = Minecraft.getInstance().font;
-        this.w = clamp(orDefault(PatternUploadConfig.panelW(), DEFAULT_W), MIN_W, MAX_W);
-        this.maxRows = clamp(orDefault(PatternUploadConfig.panelRows(), DEFAULT_ROWS), MIN_ROWS, MAX_ROWS_LIMIT);
-        Integer px = PatternUploadConfig.panelX();
-        Integer py = PatternUploadConfig.panelY();
-        if (px != null && py != null) {
-            this.x = Math.max(0, Math.min(px, screen.width - w));
-            this.y = Math.max(0, Math.min(py, screen.height - 40));
-        } else {
-            defaultPosition();
-        }
+        // 頁面式：填滿終端 GUI 矩形（EMI/JEI 本就避開 GUI，不會被右側物品重疊，也不彈出到外面）
+        this.x = screen.getGuiLeft();
+        this.y = screen.getGuiTop();
+        this.w = screen.getXSize();
+        this.maxRows = clamp((screen.getYSize() - HEADER_H - SEARCH_H - 8) / ROW_H, MIN_ROWS, MAX_ROWS_LIMIT);
         this.searchBox = new EditBox(this.font, x + 4, y + HEADER_H, w - 8, SEARCH_H - 2, Component.empty());
         this.searchBox.setMaxLength(64);
         this.searchBox.setBordered(true);
         this.searchBox.setHint(Component.translatable("pattern_upload.search"));
         this.searchBox.setResponder(s -> rebuildRows());
         rebuildRows();
-    }
-
-    /** 預設位置：合成欄（3x3 編碼格）右邊；取不到 slot 時退回終端 GUI 右側。 */
-    private void defaultPosition() {
-        int gx = -1;
-        int gy = -1;
-        try {
-            if (screen.getMenu() instanceof PatternEncodingTermMenu menu) {
-                int right = 0;
-                int top = Integer.MAX_VALUE;
-                for (Slot s : menu.getCraftingGridSlots()) {
-                    right = Math.max(right, s.x + 18);
-                    top = Math.min(top, s.y);
-                }
-                if (right > 0 && top != Integer.MAX_VALUE) {
-                    gx = screen.getGuiLeft() + right + 4;
-                    gy = screen.getGuiTop() + top - 4;
-                }
-            }
-        } catch (Throwable ignored) {
-            // AE2 內部變動時退回 GUI 右側
-        }
-        if (gx < 0) {
-            gx = screen.getGuiLeft() + screen.getXSize() + 4;
-            gy = screen.getGuiTop() + 4;
-        }
-        this.x = Math.max(0, Math.min(gx, screen.width - w));
-        this.y = Math.max(2, Math.min(gy, screen.height - heightFor(maxRows) - 2));
-    }
-
-    private static int orDefault(Integer v, int def) {
-        return v != null ? v : def;
     }
 
     private static int clamp(int v, int min, int max) {
@@ -228,13 +181,7 @@ final class UploadOverlay {
     }
 
     private int panelHeight() {
-        // 高度固定跟著 maxRows（縮放把手調的值），列不足時留空白，長寬才都真正可調
         return heightFor(maxRows);
-    }
-
-    /** 面板畫面矩形 {x, y, w, h}（供 EMI 排除區把右側物品擠開）。 */
-    int[] bounds() {
-        return new int[] { x, y, w, panelHeight() };
     }
 
     private boolean craftMode() {
@@ -270,11 +217,6 @@ final class UploadOverlay {
 
         g.fill(x, y, x + w, y + h, 0xF0141414);
         g.renderOutline(x, y, w, h, 0xFF8B8B8B);
-
-        // 右下角縮放把手（⌟ 形記號）
-        int gripColor = isOverResizeGrip(mouseX, mouseY) || resizing ? 0xFFFFFFFF : 0xFF9B9B9B;
-        g.fill(x + w - 8, y + h - 2, x + w - 1, y + h - 1, gripColor);
-        g.fill(x + w - 2, y + h - 8, x + w - 1, y + h - 1, gripColor);
 
         // header：樣板機器 icon（顯示用）+ 標題 + 關閉鈕
         g.renderItem(headerIcon(), x + 2, y + 1);
@@ -353,49 +295,16 @@ final class UploadOverlay {
         return mx >= x + w - 13 && mx < x + w - 1 && my >= y + 2 && my < y + 15;
     }
 
-    /** 右下角 12x12 = 縮放把手。 */
-    private boolean isOverResizeGrip(double mx, double my) {
-        int h = panelHeight();
-        return mx >= x + w - 12 && mx < x + w && my >= y + h - 12 && my < y + h;
-    }
-
-    /** 標題列空白處（扣掉右關閉鈕）= 拖曳把手。 */
-    private boolean isOverDragHandle(double mx, double my) {
-        return mx >= x && mx < x + w - 14 && my >= y && my < y + HEADER_H;
-    }
-
     /** 目的地列最左 icon 區（點擊 = 指定該供應器的機器）。 */
     private boolean isOverRowIcon(double mx, double my, int rowY) {
         return mx >= x + 2 && mx < x + 20 && my >= rowY && my < rowY + ROW_H;
     }
 
     boolean mouseDragged(double mx, double my, int button, double dragX, double dragY) {
-        if (resizing) {
-            // 以左上角為錨點，拖右下角改寬與列數
-            w = clamp((int) mx - x, MIN_W, MAX_W);
-            int targetH = (int) my - y;
-            maxRows = clamp(Math.round((targetH - HEADER_H - SEARCH_H - 8) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
-            searchBox.setWidth(w - 8);
-            rebuildRows();
-            return true;
-        }
-        if (!dragging) {
-            return false;
-        }
-        x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - w));
-        y = Math.max(0, Math.min((int) my - dragOffY, screen.height - 40));
-        searchBox.setX(x + 4);
-        searchBox.setY(y + HEADER_H);
-        return true;
+        return false; // 頁面式：不拖曳
     }
 
     boolean mouseReleased(double mx, double my, int button) {
-        if (dragging || resizing) {
-            dragging = false;
-            resizing = false;
-            PatternUploadConfig.savePanel(x, y, w, maxRows); // 拖曳/縮放結束才落盤
-            return true;
-        }
         return false;
     }
 
@@ -423,22 +332,12 @@ final class UploadOverlay {
         }
         searchBox.setFocused(false);
 
-        if (isOverResizeGrip(mx, my)) {
-            resizing = true;
-            return true;
-        }
         if (isOverClose(mx, my)) {
             if (mode == Mode.MACHINE_SELECT) {
                 exitMachineSelect();
             } else {
                 PatternUploadClient.removeOverlay();
             }
-            return true;
-        }
-        if (isOverDragHandle(mx, my)) {
-            dragging = true;
-            dragOffX = (int) mx - x;
-            dragOffY = (int) my - y;
             return true;
         }
         int idx = rowIndexAt(mx, my);
