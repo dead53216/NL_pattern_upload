@@ -159,9 +159,7 @@ final class UploadOverlay {
                 GTRecipeType assigned = craft ? null : PatternUploadConfig.machineFor(providerName);
                 Component display = dest.name();
                 if (assigned != null) {
-                    // 已指定：icon 換成指定的機器，文字＝「機器名（原標籤）」。
-                    // 原標籤一律用 dest.name＝GTOCore 給的清單標籤：沒改名照放，改名後 GTOCore
-                    // 自動給自訂名（優先），可據此分辨同名供應器。
+                    // 已指定：icon 換成指定的機器；文字＝「機器名（原標籤）」，原標籤＝dest.name（改名後即自訂名）。
                     display = Component.literal(RecipeTypeIcons.name(assigned).getString() + " (" + providerName + ")");
                 }
                 if (!PinyinMatch.matches(display.getString(), filter)) {
@@ -454,6 +452,12 @@ final class UploadOverlay {
                     rebuildRows();
                 } else if (!row.full()) {
                     ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(row.destIndex());
+                    var player = Minecraft.getInstance().player;
+                    if (player != null) {
+                        // 與自動上傳一致：手動選擇上傳也在聊天欄回報
+                        player.displayClientMessage(
+                                Component.translatable("pattern_upload.sent", row.name()), false);
+                    }
                     PatternUploadClient.removeOverlay();
                 }
             } else {
