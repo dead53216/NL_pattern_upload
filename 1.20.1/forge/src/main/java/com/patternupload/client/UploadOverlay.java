@@ -159,9 +159,10 @@ final class UploadOverlay {
                 GTRecipeType assigned = craft ? null : PatternUploadConfig.machineFor(providerName);
                 Component display = dest.name();
                 if (assigned != null) {
-                    // 指定後顯示「機器名（供應器貼著的方塊）」；貼著的方塊取自清單 icon（GTOCore 給的群組圖示）
-                    String attached = dest.icon() != null ? dest.icon().getDisplayName().getString() : providerName;
-                    display = Component.literal(RecipeTypeIcons.name(assigned).getString() + " (" + attached + ")");
+                    // 已指定：icon 換成指定的機器，文字＝「機器名（原標籤）」。
+                    // 原標籤一律用 dest.name＝GTOCore 給的清單標籤：沒改名照放，改名後 GTOCore
+                    // 自動給自訂名（優先），可據此分辨同名供應器。
+                    display = Component.literal(RecipeTypeIcons.name(assigned).getString() + " (" + providerName + ")");
                 }
                 if (!PinyinMatch.matches(display.getString(), filter)) {
                     continue;
