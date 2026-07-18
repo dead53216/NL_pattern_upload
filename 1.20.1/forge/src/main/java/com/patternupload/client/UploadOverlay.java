@@ -39,7 +39,7 @@ final class UploadOverlay {
         MACHINE_SELECT
     }
 
-    private static final int ROW_H = 16;
+    private static final int ROW_H = 18;
     private static final int HEADER_H = 18;
     private static final int SEARCH_H = 14;
     private static final int DEFAULT_W = 150;
@@ -50,6 +50,10 @@ final class UploadOverlay {
     private static final int MAX_ROWS_LIMIT = 12;
     /** MACHINE_SELECT 清單裡「清除指定」列的 destIndex 哨兵值。 */
     private static final int CLEAR_ROW = -2;
+    /** 「通用工廠」類供應器前綴（子機器名接在分隔符後，顯示時拆兩行）。 */
+    private static final String[] FACTORY_PREFIXES = {"通用工廠", "通用工厂"};
+    /** 通用工廠前綴與子機器名之間可能的分隔符。 */
+    private static final String FACTORY_SEPARATORS = " -－—:：·・";
 
     private final PatternEncodingTermScreen<?> screen;
     private final java.util.List<ListBoxReflector.Dest> destinations;
@@ -158,11 +162,14 @@ final class UploadOverlay {
                 String providerName = dest.name().getString();
                 GTRecipeType assigned = craft ? null : PatternUploadConfig.machineFor(providerName);
                 Component display = dest.name();
+                String filterText = providerName;
                 if (assigned != null) {
-                    // 已指定：icon 換成指定的機器；文字＝「機器名（原標籤）」，原標籤＝dest.name（改名後即自訂名）。
-                    display = Component.literal(RecipeTypeIcons.name(assigned).getString() + " (" + providerName + ")");
+                    // 已指定：icon 換成指定的機器；第一行只放機器名，原標籤（改名後的自訂名）換行放括號裡（見 render）。
+                    String machineName = RecipeTypeIcons.name(assigned).getString();
+                    display = Component.literal(machineName);
+                    filterText = machineName + " (" + providerName + ")";
                 }
-                if (!PinyinMatch.matches(display.getString(), filter)) {
+                if (!PinyinMatch.matches(filterText, filter)) {
                     continue;
                 }
                 if (assigned != null) {
@@ -213,6 +220,26 @@ final class UploadOverlay {
             return 1;
         }
         return 3;
+    }
+
+    /**
+     * 「通用工廠 - 子機器」拆成 {"通用工廠", "子機器"}；非此格式（無前綴或前綴後非分隔符）回 null。
+     * 用來讓通用工廠類供應器名稱換行顯示（前綴一行、子機器名一行）。
+     */
+    private static String[] splitFactoryName(String s) {
+        for (String pre : FACTORY_PREFIXES) {
+            if (s.length() > pre.length() && s.startsWith(pre)
+                    && FACTORY_SEPARATORS.indexOf(s.charAt(pre.length())) >= 0) {
+                int i = pre.length();
+                while (i < s.length() && FACTORY_SEPARATORS.indexOf(s.charAt(i)) >= 0) {
+                    i++;
+                }
+                if (i < s.length()) {
+                    return new String[] {pre, s.substring(i)};
+                }
+            }
+        }
+        return null;
     }
 
     private int visibleRows() {
@@ -304,11 +331,24 @@ final class UploadOverlay {
                 g.renderItem(row.icon(), x + 3, ry);
             }
             int color = (mode == Mode.DESTINATIONS && row.full()) ? 0x777777 : 0xE0E0E0;
-            String name = row.name().getString();
-            if (mode == Mode.DESTINATIONS && row.full()) {
-                name = name + " [" + Component.translatable("pattern_upload.full").getString() + "]";
+            String fullTag = (mode == Mode.DESTINATIONS && row.full())
+                    ? " [" + Component.translatable("pattern_upload.full").getString() + "]" : "";
+            if (mode == Mode.DESTINATIONS && row.type() != null && !row.providerName().isEmpty()) {
+                // 已指定：第一行機器名，第二行括號放（改名後的）原標籤；「通用工廠 - 子機器」只留子機器。
+                String[] pf = splitFactoryName(row.providerName());
+                String label = pf != null ? pf[1] : row.providerName();
+                g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, w - 25), x + 21, ry + 1, color);
+                g.drawString(font, font.plainSubstrByWidth("(" + label + ")", w - 25), x + 21, ry + 9, 0x999999);
+            } else {
+                // 未指定：「通用工廠 - 子機器」拆兩行（通用工廠 / 子機器），其餘單行置中。
+                String[] pf = mode == Mode.DESTINATIONS ? splitFactoryName(row.name().getString()) : null;
+                if (pf != null) {
+                    g.drawString(font, font.plainSubstrByWidth(pf[0], w - 25), x + 21, ry + 1, color);
+                    g.drawString(font, font.plainSubstrByWidth(pf[1] + fullTag, w - 25), x + 21, ry + 9, 0x999999);
+                } else {
+                    g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, w - 25), x + 21, ry + 5, color);
+                }
             }
-            g.drawString(font, font.plainSubstrByWidth(name, w - 25), x + 21, ry + 4, color);
         }
         if (rows.isEmpty()) {
             g.drawString(font, Component.translatable("pattern_upload.empty").getString(), x + 6, top + 4, 0x888888);
@@ -454,9 +494,12 @@ final class UploadOverlay {
                     ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(row.destIndex());
                     var player = Minecraft.getInstance().player;
                     if (player != null) {
-                        // 與自動上傳一致：手動選擇上傳也在聊天欄回報
+                        // 與自動上傳一致：手動選擇上傳也在聊天欄回報。已指定列 name 只剩機器名，補回括號原標籤。
+                        Component sentName = (row.type() != null && !row.providerName().isEmpty())
+                                ? Component.literal(row.name().getString() + " (" + row.providerName() + ")")
+                                : row.name();
                         player.displayClientMessage(
-                                Component.translatable("pattern_upload.sent", row.name()), false);
+                                Component.translatable("pattern_upload.sent", sentName), false);
                     }
                     PatternUploadClient.removeOverlay();
                 }
