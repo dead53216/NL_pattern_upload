@@ -2,6 +2,8 @@
   "mod.pattern_upload": "Pattern Upload",
   "pattern_upload.assign.clear": "清除指定",
   "pattern_upload.assign.tooltip": "點擊指定此供應器對應的機器（接口貼子網時用）",
+  "pattern_upload.batch.hint": "已選 %s 個・中鍵上傳",
+  "pattern_upload.batch.sent": "已批次上傳至 %s 個目的地",
   "pattern_upload.craft.full": "分子裝配室/裝配矩陣全滿，未上傳",
   "pattern_upload.craft.none": "網路上沒有分子裝配室/裝配矩陣，未上傳",
   "pattern_upload.craft.sent": "合成樣板已上傳：%s",

@@ -2,6 +2,8 @@
   "mod.pattern_upload": "Pattern Upload",
   "pattern_upload.assign.clear": "清除指定",
   "pattern_upload.assign.tooltip": "点击指定此供应器对应的机器（接口贴子网时用）",
+  "pattern_upload.batch.hint": "已选 %s 个·中键上传",
+  "pattern_upload.batch.sent": "已批量上传至 %s 个目的地",
   "pattern_upload.craft.full": "分子装配室/装配矩阵全满，未上传",
   "pattern_upload.craft.none": "网络上没有分子装配室/装配矩阵，未上传",
   "pattern_upload.craft.sent": "合成样板已上传：%s",

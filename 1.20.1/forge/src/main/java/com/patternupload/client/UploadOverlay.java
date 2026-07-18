@@ -22,7 +22,9 @@ import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 上傳介面 overlay：由 ScreenEvent 疊加在樣板編碼終端上。
@@ -75,6 +77,8 @@ final class UploadOverlay {
     private boolean selectingDup = false;
     private int scrollOff = 0;
     private final List<Row> rows = new ArrayList<>();
+    /** 中鍵多選高亮的目的地（以 dest.index() 為鍵，本次 overlay 期間 index 穩定）；再中鍵已選列 = 批次上傳。 */
+    private final Set<Integer> selected = new HashSet<>();
 
     private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type,
                        String providerName) {}
@@ -325,6 +329,11 @@ final class UploadOverlay {
             if (iconHover) {
                 g.fill(x + 2, ry, x + 20, ry + ROW_H, 0x60FFFFFF);
             }
+            if (mode == Mode.DESTINATIONS && selected.contains(row.destIndex())) {
+                // 中鍵多選高亮
+                g.fill(x + 2, ry, x + w - 2, ry + ROW_H, 0x5044DD44);
+                g.renderOutline(x + 2, ry, w - 4, ROW_H, 0xFF55EE55);
+            }
             if (row.key() != null) {
                 AEKeyRendering.drawInGui(Minecraft.getInstance(), g, x + 3, ry, row.key());
             } else {
@@ -356,6 +365,12 @@ final class UploadOverlay {
         if (rows.size() > maxRows) {
             String pos = (scrollOff + 1) + "-" + Math.min(scrollOff + maxRows, rows.size()) + "/" + rows.size();
             g.drawString(font, pos, x + w - 12 - font.width(pos), y + h - 11, 0x888888);
+        }
+        if (mode == Mode.DESTINATIONS && !selected.isEmpty()) {
+            // 中鍵多選提示：已選數量＋再中鍵批次上傳
+            String hint = font.plainSubstrByWidth(
+                    Component.translatable("pattern_upload.batch.hint", selected.size()).getString(), w - 40);
+            g.drawString(font, hint, x + 5, y + h - 11, 0x55EE55);
         }
         if (mode == Mode.MACHINE_SELECT && selectingDup) {
             // 同名供應器共用指定（客戶端只拿得到名稱，分不出實體）——提醒玩家先改名
@@ -458,6 +473,22 @@ final class UploadOverlay {
         }
         searchBox.setFocused(false);
 
+        // 中鍵：多選高亮 / 再中鍵已選列 = 批次上傳所有已選（各扣一張樣板，伺服端 sendPattern 自理）
+        if (button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE && mode == Mode.DESTINATIONS && !craftMode()) {
+            int mi = rowIndexAt(mx, my);
+            if (mi >= 0) {
+                Row row = rows.get(mi);
+                if (!row.full()) {
+                    if (selected.contains(row.destIndex())) {
+                        batchUpload();
+                    } else {
+                        selected.add(row.destIndex());
+                    }
+                }
+            }
+            return true; // 面板內中鍵一律吃掉，避免誤觸終端（中鍵取物）
+        }
+
         if (isOverResizeGrip(mx, my)) {
             resizing = true;
             return true;
@@ -511,6 +542,29 @@ final class UploadOverlay {
             return true;
         }
         return true; // 面板內其他區域：吃掉點擊避免誤觸終端
+    }
+
+    /**
+     * 批次上傳：對所有中鍵已選的目的地各送一次樣板。
+     * 伺服端 gtolib$sendPattern 每次自 ME 網路抽一張空白樣板、寫入該供應器（樣板由伺服端自扣），
+     * 故這裡逐一呼叫即可。以 destinations（伺服端順序）迭代，涵蓋被搜尋過濾掉的已選列；跳過滿槽。
+     */
+    private void batchUpload() {
+        var menu = (IExtendedPatternEncodingTerm.Menu) screen.getMenu();
+        int count = 0;
+        for (var d : destinations) {
+            if (d.full() || !selected.contains(d.index())) {
+                continue;
+            }
+            menu.gtolib$sendPattern(d.index());
+            count++;
+        }
+        var player = Minecraft.getInstance().player;
+        if (player != null) {
+            player.displayClientMessage(
+                    Component.translatable("pattern_upload.batch.sent", count), false);
+        }
+        PatternUploadClient.removeOverlay();
     }
 
     private void exitMachineSelect() {
