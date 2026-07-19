@@ -570,11 +570,22 @@ final class UploadOverlay {
     private void batchUpload() {
         var menu = (IExtendedPatternEncodingTerm.Menu) screen.getMenu();
         var player = Minecraft.getInstance().player;
+        // 需要的張數 = 已選且非滿槽的目的地數（每張目的地各扣一張空白樣板）
+        int needed = 0;
+        for (var d : destinations) {
+            if (!d.full() && selected.contains(d.index())) {
+                needed++;
+            }
+        }
+        if (needed == 0) {
+            return; // 已選全滿槽或無有效選取
+        }
         long blanks = PatternUploadClient.blankPatternCount(screen.getMenu());
-        if (blanks == 0) {
-            // 網路沒空白樣板 → 不上傳、不謊報成功；面板留著讓玩家補樣板後重試
+        if (blanks != -1 && blanks < needed) {
+            // 空白樣板不足以涵蓋全部已選 → 完全不上傳（all-or-nothing），面板留著讓玩家補樣板後重試
             if (player != null) {
-                player.displayClientMessage(Component.translatable("pattern_upload.no_blank"), false);
+                player.displayClientMessage(
+                        Component.translatable("pattern_upload.batch.short", needed, blanks), false);
             }
             return;
         }
@@ -582,9 +593,6 @@ final class UploadOverlay {
         for (var d : destinations) {
             if (d.full() || !selected.contains(d.index())) {
                 continue;
-            }
-            if (blanks > 0 && count >= blanks) {
-                break; // 空白樣板不夠：能傳幾張傳幾張（blanks == -1 時不設限，維持原行為）
             }
             menu.gtolib$sendPattern(d.index());
             count++;
