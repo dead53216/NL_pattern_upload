@@ -533,8 +533,15 @@ final class UploadOverlay {
                     // 有多選 → 左鍵批次上傳全部已選（不論點在哪列）
                     batchUpload();
                 } else if (!row.full()) {
-                    ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(row.destIndex());
                     var player = Minecraft.getInstance().player;
+                    if (PatternUploadClient.blankPatternCount(screen.getMenu()) == 0) {
+                        // 網路沒空白樣板 → 不上傳、不謊報成功；面板留著讓玩家補樣板後重試
+                        if (player != null) {
+                            player.displayClientMessage(Component.translatable("pattern_upload.no_blank"), false);
+                        }
+                        return true;
+                    }
+                    ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(row.destIndex());
                     if (player != null) {
                         // 與自動上傳一致：手動選擇上傳也在聊天欄回報。已指定列 name 只剩機器名，補回括號原標籤。
                         Component sentName = (row.type() != null && !row.providerName().isEmpty())
@@ -562,15 +569,26 @@ final class UploadOverlay {
      */
     private void batchUpload() {
         var menu = (IExtendedPatternEncodingTerm.Menu) screen.getMenu();
+        var player = Minecraft.getInstance().player;
+        long blanks = PatternUploadClient.blankPatternCount(screen.getMenu());
+        if (blanks == 0) {
+            // 網路沒空白樣板 → 不上傳、不謊報成功；面板留著讓玩家補樣板後重試
+            if (player != null) {
+                player.displayClientMessage(Component.translatable("pattern_upload.no_blank"), false);
+            }
+            return;
+        }
         int count = 0;
         for (var d : destinations) {
             if (d.full() || !selected.contains(d.index())) {
                 continue;
             }
+            if (blanks > 0 && count >= blanks) {
+                break; // 空白樣板不夠：能傳幾張傳幾張（blanks == -1 時不設限，維持原行為）
+            }
             menu.gtolib$sendPattern(d.index());
             count++;
         }
-        var player = Minecraft.getInstance().player;
         if (player != null) {
             player.displayClientMessage(
                     Component.translatable("pattern_upload.batch.sent", count), false);

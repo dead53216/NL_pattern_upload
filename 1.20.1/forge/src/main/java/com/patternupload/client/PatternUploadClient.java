@@ -137,6 +137,27 @@ public final class PatternUploadClient {
         }
     }
 
+    /**
+     * 客戶端可見的網路空白樣板數量（gtolib$sendPattern 每送一張目的地就從網路抽一張空白樣板）。
+     * PatternEncodingTermMenu extends MEStorageMenu → 有同步到客戶端的網路物品表（ClientRepo）。
+     * 回傳：≥0 = 網路空白樣板數；-1 = 查不到（保守維持原樂觀行為，不擋上傳）。
+     */
+    static long blankPatternCount(AbstractContainerMenu menu) {
+        try {
+            if (!(menu instanceof appeng.menu.me.common.MEStorageMenu me)) {
+                return -1;
+            }
+            appeng.menu.me.common.IClientRepo repo = me.getClientRepo();
+            if (repo == null) {
+                return -1;
+            }
+            var entry = repo.getByKey(appeng.api.stacks.AEItemKey.of(appeng.core.definitions.AEItems.BLANK_PATTERN));
+            return entry == null ? 0 : entry.getStoredAmount();
+        } catch (Throwable t) {
+            return -1; // API 異動/查不到 → 回 -1，維持原行為
+        }
+    }
+
     @Nullable
     private static UploadOverlay activeOverlay(ScreenEvent event) {
         if (overlay != null && event.getScreen() == overlay.screen()) {
@@ -183,7 +204,14 @@ public final class PatternUploadClient {
                     }
                 }
             }
-            if (target != null) {
+            if (target != null && blankPatternCount(screen.getMenu()) == 0) {
+                // 網路沒空白樣板 → 不上傳、不謊報成功
+                if (player != null) {
+                    player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                            "pattern_upload.no_blank"), false);
+                }
+                LOGGER.info("[pattern_upload] craft: no blank pattern in network, aborted");
+            } else if (target != null) {
                 ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
                 if (player != null) {
                     // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）
@@ -211,8 +239,17 @@ public final class PatternUploadClient {
             if (matches.size() == 1) {
                 ListBoxReflector.Dest target = matches.get(0);
                 overlay = null;
-                ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
                 var player = Minecraft.getInstance().player;
+                if (blankPatternCount(screen.getMenu()) == 0) {
+                    // 網路沒空白樣板 → 不上傳、不謊報成功
+                    if (player != null) {
+                        player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                                "pattern_upload.no_blank"), false);
+                    }
+                    LOGGER.info("[pattern_upload] single match but no blank pattern in network, aborted");
+                    return;
+                }
+                ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
                 if (player != null) {
                     // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）
                     player.displayClientMessage(net.minecraft.network.chat.Component.translatable(

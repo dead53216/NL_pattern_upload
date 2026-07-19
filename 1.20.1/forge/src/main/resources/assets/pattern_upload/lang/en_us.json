@@ -12,6 +12,7 @@
   "pattern_upload.empty": "No destinations available",
   "pattern_upload.full": "Full",
   "pattern_upload.full.tooltip": "This destination has no free pattern slots",
+  "pattern_upload.no_blank": "No blank pattern in the network, nothing sent",
   "pattern_upload.no_machine": "Unknown machine",
   "pattern_upload.search": "Search…",
   "pattern_upload.sent": "Pattern sent to: %s"

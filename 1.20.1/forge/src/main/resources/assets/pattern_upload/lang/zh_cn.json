@@ -12,6 +12,7 @@
   "pattern_upload.empty": "没有可用的目的地",
   "pattern_upload.full": "满",
   "pattern_upload.full.tooltip": "该目的地样板槽已满",
+  "pattern_upload.no_blank": "网络中没有空白样板，未上传",
   "pattern_upload.no_machine": "未知机器",
   "pattern_upload.search": "搜索…",
   "pattern_upload.sent": "样板已上传：%s"
