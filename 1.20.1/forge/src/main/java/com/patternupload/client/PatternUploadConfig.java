@@ -26,9 +26,10 @@ import java.util.Map;
 
 /**
  * 持久化設定（config/pattern_upload.json）：
- * - providerMachines：供應器名稱 → 指定的配方類型 registry id（接口類供應器手動指定用）
+ * - providerMachines：供應器鍵 → 指定的配方類型 registry id（接口類供應器手動指定用）
+ *   鍵可為「座標」（{@code pos:<dim>#<packedLong>}，伺服端回傳世界座標 → 同名供應器獨立）
+ *   或「顯示名稱」（無座標時的退路，相容舊設定）。
  * - panelX / panelY / panelW / panelRows：overlay 面板拖曳後的位置與縮放後的尺寸
- * 供應器以「顯示名稱」為鍵：接口/供應器改名後即為獨立身分；同名者共用指定（符合直覺）。
  */
 final class PatternUploadConfig {
 
@@ -106,11 +107,19 @@ final class PatternUploadConfig {
         }
     }
 
-    /** 該供應器（名稱）被指定的配方類型；未指定或該類型已不存在時回 null。 */
+    /**
+     * 該供應器被指定的配方類型；未指定或該類型已不存在時回 null。
+     * <p>
+     * 鍵優先序：有座標鍵（{@code posKey}，來自伺服端回傳的世界座標）先查座標鍵 → 讓同名供應器獨立；
+     * 查無座標指定時退回名稱鍵（相容舊設定與伺服端未回座標的情形）。
+     */
     @Nullable
-    static GTRecipeType machineFor(String providerName) {
+    static GTRecipeType machineFor(@Nullable String posKey, String providerName) {
         load();
-        String id = providerMachines.get(providerName);
+        String id = posKey != null ? providerMachines.get(posKey) : null;
+        if (id == null) {
+            id = providerMachines.get(providerName);
+        }
         if (id == null) {
             return null;
         }
@@ -118,13 +127,21 @@ final class PatternUploadConfig {
         return rl == null ? null : GTRegistries.RECIPE_TYPES.get(rl);
     }
 
-    /** 指定（type != null）或清除（type == null）供應器的機器，立即落盤。 */
-    static void assign(String providerName, @Nullable GTRecipeType type) {
+    /**
+     * 指定（type != null）或清除（type == null）供應器的機器，立即落盤。
+     * 有 {@code posKey}（座標）時以座標為鍵 → 同名供應器各自獨立；否則以名稱為鍵。
+     * 清除時連同 legacy 名稱鍵一起移除，避免座標清了名稱鍵殘留。
+     */
+    static void assign(@Nullable String posKey, String providerName, @Nullable GTRecipeType type) {
         load();
+        String key = posKey != null ? posKey : providerName;
         if (type == null) {
-            providerMachines.remove(providerName);
+            providerMachines.remove(key);
+            if (posKey != null) {
+                providerMachines.remove(providerName);
+            }
         } else {
-            providerMachines.put(providerName, type.registryName.toString());
+            providerMachines.put(key, type.registryName.toString());
         }
         save();
     }

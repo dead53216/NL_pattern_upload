@@ -1,6 +1,7 @@
 package com.patternupload.client;
 
 import com.patternupload.PatternUploadMod;
+import com.patternupload.net.Network;
 
 import com.gregtechceu.gtceu.api.recipe.GTRecipeType;
 import com.gregtechceu.gtceu.api.registry.GTRegistries;
@@ -42,6 +43,17 @@ public final class PatternUploadClient {
      */
     private static boolean forcePanel = false;
 
+    /**
+     * 目的地座標同步（同名供應器獨立身分用）：每次劫持新清單 {@link #posGen}+1，
+     * 過濾過期 S2C 回覆；{@link #posDims}/{@link #posPacked} 照 index 對齊，
+     * null 或某格 dim==null = 該列無座標 → 退回名稱鍵。伺服端沒裝本 mod 時永遠收不到 → 全退名稱鍵。
+     */
+    private static int posGen = 0;
+    @Nullable
+    private static ResourceLocation[] posDims = null;
+    @Nullable
+    private static long[] posPacked = null;
+
     static {
         LOGGER.info("[pattern_upload] PatternUploadClient loaded (hijack mode, no mixin)");
     }
@@ -50,6 +62,47 @@ public final class PatternUploadClient {
 
     public static void removeOverlay() {
         overlay = null;
+    }
+
+    // ------------------------------------------------------ 目的地座標同步
+
+    /** 開面板時呼叫：清掉上一批座標、發請求要這批目的地的世界座標（伺服端有裝本 mod 才會回）。 */
+    private static void requestPositionsFor(AbstractContainerMenu menu) {
+        posDims = null;
+        posPacked = null;
+        int gen = ++posGen;
+        try {
+            Network.requestPositions(menu.containerId, gen);
+        } catch (Throwable t) {
+            LOGGER.error("[pattern_upload] 發送座標請求失敗", t);
+        }
+    }
+
+    /** 伺服端回座標（由網路層在客戶端呼叫）。gen 不符即過期丟棄；符合則落地並刷新開啟中的面板。 */
+    public static void receiveDestPositions(Network.ReplyS2C msg) {
+        if (msg.gen() != posGen) {
+            return; // 過期回覆（已換新清單），忽略
+        }
+        posDims = msg.dims();
+        posPacked = msg.packed();
+        if (overlay != null) {
+            overlay.onPositionsUpdated();
+        }
+        LOGGER.info("[pattern_upload] received {} destination positions (gen {})", msg.dims().length, msg.gen());
+    }
+
+    /**
+     * 第 index 個目的地的持久身分鍵：有世界座標回 {@code "pos:<dim>#<packedLong>"}（同名供應器各自獨立），
+     * 無座標（尚未收到／伺服端未提供／該容器非方塊）回 null → 呼叫端退回名稱鍵。
+     */
+    @Nullable
+    static String posKeyFor(int index) {
+        ResourceLocation[] dims = posDims;
+        long[] packed = posPacked;
+        if (dims == null || packed == null || index < 0 || index >= dims.length || dims[index] == null) {
+            return null;
+        }
+        return "pos:" + dims[index] + "#" + packed[index];
     }
 
     /**
@@ -272,6 +325,8 @@ public final class PatternUploadClient {
                 LOGGER.info("[pattern_upload] {} matches → open panel for user choice", matches.size());
             }
         }
+        // 開面板：向伺服端要這批目的地的世界座標（同名供應器獨立身分用）；~1 tick 後回來刷新面板。
+        requestPositionsFor(screen.getMenu());
         overlay = new UploadOverlay(screen, dests);
         LOGGER.info("[pattern_upload] hijacked GTOCore destination list: {} entries", dests.size());
     }
@@ -365,6 +420,10 @@ public final class PatternUploadClient {
         // 關終端就清中鍵旗標，避免無效樣板（伺服端沒回清單）殘留到下次右鍵誤觸
         if (event.getScreen() instanceof PatternEncodingTermScreen<?>) {
             forcePanel = false;
+            // 換世代 + 清座標：關終端後若有慢回的 S2C 座標也視為過期，不落到下次開啟的清單
+            posGen++;
+            posDims = null;
+            posPacked = null;
         }
     }
 

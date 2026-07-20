@@ -10,7 +10,11 @@ CLAUDE.md 只放指引；實作細節寫在 `README.md`／程式碼。
 - 依賴 GTO 整合包（gtocore/gtolib/gtceu/ae2-gto，maven.gtodyssey.com，全 compileOnly）；`mods.toml` 強制 `gtocore`。
 - **全 mod 零 mixin**（mixins.json 留空勿加）：gtocore 類在 dev 不可被 mixin 變換、正式包亦套不上；
   攔截一律走「Render.Pre 劫持 GTOCore 清單框 + 反射」（見 README）。
-- 與伺服端互動只准用 GTOCore 既有介面（現僅 `gtolib$sendPattern`），不自建封包。
-- 供應器→機器指定為**純客戶端持久化**（`config/pattern_upload.json`，名稱為鍵）；不寫樣板 NBT。
+- 與伺服端互動優先用 GTOCore 既有介面（`gtolib$sendPattern` / `gtolib$sendEncodeRequest`）。
+  **例外**：目的地座標同步（同名供應器獨立身分）走本 mod 自建封包 `com.patternupload.net.Network`
+  （雙端註冊；伺服端反射 GTOCore 私有欄位 `gto$currentContainers` 取座標）——GTOCore 沒把座標放進它的封包，
+  無此路同名供應器分不出實體。零 mixin 仍成立（只反射＋自建封包）。伺服端沒裝本 mod → 收不到座標 → 自動退名稱鍵。
+- 供應器→機器指定為**純客戶端持久化**（`config/pattern_upload.json`）；不寫樣板 NBT。
+  鍵優先用「世界座標」（伺服端回傳 → 同名供應器各自獨立），無座標時退「顯示名稱」（相容舊設定）。
 - `jecharacters` 拼音搜尋為軟依賴（純反射，非編譯依賴，照 NL_oreveinfilter 模式）。
 - 動攔截／dev 流程／建置鏈前，先讀工作區 `docs/NL_pattern_upload/gtocore-hijack-pitfalls.md`（雷點筆記）。

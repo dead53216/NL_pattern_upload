@@ -33,6 +33,11 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   registry id），挑第一個未滿者上傳；全滿 → 停止動作。actionbar 顯示已上傳／全滿提示。
   伺服端 `gto$craftFirst` 對這些容器不可靠（`isCraftingContainer` 未實作，分子裝配室可能排最後）。
   **除分子裝配室/裝配矩陣外一律取消上傳**（沒有保底）：認不到 → 「網路上沒有…」、全滿 → 「全滿」。
+- **座標身分（同名供應器獨立指定）**：GTOCore 送回客戶端的清單只有 name/icon/full/index，同名供應器
+  （如接口貼子網）分不出實體。開面板時本 mod 發自建封包向伺服端要這批目的地的**世界座標**
+  （伺服端反射 `gto$currentContainers` 逐個取 `IPPPC.gto$getBlockPos()`＋維度，照 index 回傳），
+  ~1 tick 後回來刷新面板；指定即以座標為鍵（`pos:<dim>#<packedLong>`）落盤 → **每台機器各自獨立**，同名也分得開。
+  伺服端沒裝本 mod／收不到座標 → 自動退回名稱鍵（舊行為）。座標非同步、僅精修顯示與指定，不影響同步的自動直傳決策。
 - 供應器被指定後：icon 換成指定的機器，**兩行顯示**——第一行機器名，第二行括號放 GTOCore 給的清單標籤
   （沒改名照放；供應器改名後 GTOCore 自動給自訂名 → 括號顯示自訂名，可分辨同名供應器）。
 - **通用工廠換行**：名稱為「通用工廠 - 子機器」格式者拆兩行（第一行「通用工廠」、第二行子機器名）；
@@ -53,7 +58,8 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 | `client/PatternUploadClient` | `ScreenEvent.Render.Pre` 輪詢 `term.gto$getPatternDestDisplay()`；`isVisible()` 一變 true → 反射抽資料 → `setVisible(false)` 藏原框 → 開 overlay。另掛 Render.Post/滑鼠/鍵盤/拖曳/Closing 事件 |
 | `client/ListBoxReflector` | 反射讀 `AESearchPatternProviderListBox.allItems`（SimpleItem: index/icon/name/full；已對照 0.5.6-alpha/beta/26.7.x），失敗自動退回原介面 |
 | `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、標題列拖曳、右下角縮放、本地重排 |
-| `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器名稱→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器以顯示名稱為鍵（改名即獨立身分，同名共用） |
+| `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器鍵→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器鍵優先「世界座標」（`pos:<dim>#<packedLong>`，同名獨立），無座標退「顯示名稱」（相容舊設定） |
+| `net/Network` | 目的地座標同步（自建封包，雙端註冊）：C2S 請求（帶 windowId＋gen 世代號）→ 伺服端反射 `gto$currentContainers` 逐個取座標＋維度照 index 回 S2C；client 以 gen 過濾過期回覆。**唯一非純客戶端元件**（伺服端也需裝，多人才有座標；單機自動雙端） |
 | `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
 
@@ -68,6 +74,9 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 
 點目的地列       → menu.gtolib$sendPattern(destIndex)   （GTOCore 介面）
 點目的地列 icon  → MACHINE_SELECT：指定該供應器的機器 → PatternUploadConfig.assign() 落盤 → 回清單重排
+
+開面板同時       → Network 自建 C2S 要座標 → 伺服端反射 gto$currentContainers 回 S2C
+  → 客戶端落地座標鍵（pos:<dim>#<packedLong>）→ rebuildRows 刷新（同名供應器獨立指定）
 ```
 
 - 自動機器判定：反射讀 GTOCore menu 的 `@GuiSync` 欄位 `gtocore$recipe`（`"<type_rl>/<recipe>"`）。
@@ -94,6 +103,8 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 
 - 只處理「這次編碼的那張」樣板（設計如此）。
 - 基礎排序沿用 GTOCore 伺服端邏輯（空槽 > 機器吻合 > 名稱吻合）；本地只再把「被指定機器且吻合」者提到最前。
-- 供應器指定以顯示名稱為鍵：**同名供應器共用同一指定**（GTOCore 只回傳 icon＋名稱＋滿槽＋index，
-  客戶端分不出同名實體；index 每次上傳重排、不能當持久身分）。要分開指定請先在遊戲內幫接口改名；
-  MACHINE_SELECT 遇同名會顯示黃字警告。改名後需重新指定。
+- 供應器指定：**伺服端有裝本 mod** → 以世界座標為鍵，同名供應器**各自獨立**（座標由自建封包補齊，
+  GTOCore 原封包不帶座標）。**伺服端沒裝本 mod／收不到座標** → 退回名稱鍵，此時同名供應器共用同一指定
+  （index 每次上傳重排、不能當持久身分），要分開得先在遊戲內幫接口改名，MACHINE_SELECT 遇同名顯示黃字警告。
+- 座標為非同步（開面板後 ~1 tick 才到）：僅精修面板顯示與指定落盤，**不影響**同步判定的自動直傳
+  （唯一供應器名稱鍵即足；同名多台本來就開面板，不會單一匹配自動傳）。舊設定（名稱鍵）在拿到座標前照樣生效。

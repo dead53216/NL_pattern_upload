@@ -72,9 +72,12 @@ final class UploadOverlay {
     private int dragOffY;
 
     private Mode mode = Mode.DESTINATIONS;
-    /** MACHINE_SELECT 模式的目標供應器名稱（config 的鍵）。 */
+    /** MACHINE_SELECT 模式的目標供應器顯示名稱（標題與名稱鍵退路用）。 */
     private String selectingName = "";
-    /** 目標名稱在本次清單中出現多次（同名供應器會共用指定）。 */
+    /** MACHINE_SELECT 目標供應器的座標鍵（有座標時 config 以此為鍵 → 同名獨立）；無座標為 null。 */
+    @org.jetbrains.annotations.Nullable
+    private String selectingPosKey = null;
+    /** 目標名稱在本次清單中出現多次且無座標可分辨（此時同名供應器才會共用指定）。 */
     private boolean selectingDup = false;
     private int scrollOff = 0;
     private final List<Row> rows = new ArrayList<>();
@@ -82,7 +85,7 @@ final class UploadOverlay {
     private final Set<Integer> selected = new HashSet<>();
 
     private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type,
-                       String providerName) {}
+                       String providerName, @org.jetbrains.annotations.Nullable String posKey) {}
 
     UploadOverlay(PatternEncodingTermScreen<?> screen, java.util.List<ListBoxReflector.Dest> destinations) {
         this.screen = screen;
@@ -147,6 +150,11 @@ final class UploadOverlay {
         return screen;
     }
 
+    /** 伺服端座標回來後（PatternUploadClient 呼叫）：以新座標鍵重排、刷新指定顯示。 */
+    void onPositionsUpdated() {
+        rebuildRows();
+    }
+
     // ------------------------------------------------------------------ data
 
     private void rebuildRows() {
@@ -166,7 +174,8 @@ final class UploadOverlay {
             }
             for (var dest : ordered) {
                 String providerName = dest.name().getString();
-                GTRecipeType assigned = craft ? null : PatternUploadConfig.machineFor(providerName);
+                String posKey = PatternUploadClient.posKeyFor(dest.index());
+                GTRecipeType assigned = craft ? null : PatternUploadConfig.machineFor(posKey, providerName);
                 Component display = dest.name();
                 String filterText = providerName;
                 if (assigned != null) {
@@ -180,22 +189,22 @@ final class UploadOverlay {
                 }
                 if (assigned != null) {
                     rows.add(new Row(RecipeTypeIcons.icon(assigned), null, display, dest.full(), dest.index(), assigned,
-                            providerName));
+                            providerName, posKey));
                 } else {
-                    rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName));
+                    rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName, posKey));
                 }
             }
         } else {
-            if (filter.isEmpty() && PatternUploadConfig.machineFor(selectingName) != null) {
+            if (filter.isEmpty() && PatternUploadConfig.machineFor(selectingPosKey, selectingName) != null) {
                 rows.add(new Row(RecipeTypeIcons.patternIcon(), null,
-                        Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null, ""));
+                        Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null, "", null));
             }
             for (GTRecipeType type : RecipeTypeIcons.allTypes()) {
                 Component name = RecipeTypeIcons.name(type);
                 if (!PinyinMatch.matches(name.getString(), filter)) {
                     continue;
                 }
-                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, ""));
+                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, "", null));
             }
         }
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - maxRows));
@@ -209,7 +218,8 @@ final class UploadOverlay {
         if (d.full()) {
             return 5;
         }
-        GTRecipeType assigned = PatternUploadConfig.machineFor(d.name().getString());
+        GTRecipeType assigned = PatternUploadConfig.machineFor(
+                PatternUploadClient.posKeyFor(d.index()), d.name().getString());
         if (assigned != null) {
             return RecipeTypeIcons.matchesType(assigned, current) ? 0 : 4;
         }
@@ -523,7 +533,9 @@ final class UploadOverlay {
                 if (!craftMode() && isOverRowIcon(mx, my, ry)) {
                     // 點 icon → 指定該供應器對應機器（滿槽也可指定）
                     selectingName = row.providerName();
-                    selectingDup = destinations.stream()
+                    selectingPosKey = row.posKey();
+                    // 有座標鍵即可分辨實體 → 不算共用；無座標時才看同名數量提醒共用
+                    selectingDup = selectingPosKey == null && destinations.stream()
                             .filter(d -> d.name().getString().equals(selectingName)).count() > 1;
                     mode = Mode.MACHINE_SELECT;
                     searchBox.setValue("");
@@ -553,8 +565,8 @@ final class UploadOverlay {
                     PatternUploadClient.removeOverlay();
                 }
             } else {
-                // 指定 / 清除該供應器的機器 → 持久化 → 回目的地清單並重排
-                PatternUploadConfig.assign(selectingName, row.destIndex() == CLEAR_ROW ? null : row.type());
+                // 指定 / 清除該供應器的機器 → 持久化（有座標則以座標為鍵）→ 回目的地清單並重排
+                PatternUploadConfig.assign(selectingPosKey, selectingName, row.destIndex() == CLEAR_ROW ? null : row.type());
                 exitMachineSelect();
             }
             return true;
@@ -607,6 +619,7 @@ final class UploadOverlay {
     private void exitMachineSelect() {
         mode = Mode.DESTINATIONS;
         selectingName = "";
+        selectingPosKey = null;
         selectingDup = false;
         searchBox.setValue("");
         scrollOff = 0;
