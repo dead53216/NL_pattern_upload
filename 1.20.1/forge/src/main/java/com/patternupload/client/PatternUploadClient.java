@@ -18,6 +18,7 @@ import net.minecraftforge.fml.common.Mod;
 import appeng.client.gui.me.items.PatternEncodingTermScreen;
 
 import org.jetbrains.annotations.Nullable;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.List;
 
@@ -34,6 +35,12 @@ public final class PatternUploadClient {
 
     @Nullable
     private static UploadOverlay overlay;
+
+    /**
+     * 中鍵點上傳鈕時設 true：下一批目的地清單回來時強制開面板、跳過自動直傳（讓玩家自選）。
+     * 由 onRenderPre 消費（開面板即清）；面板關閉時也清，避免殘留影響下次右鍵自動上傳。
+     */
+    private static boolean forcePanel = false;
 
     static {
         LOGGER.info("[pattern_upload] PatternUploadClient loaded (hijack mode, no mixin)");
@@ -186,7 +193,10 @@ public final class PatternUploadClient {
             return; // 反射失敗：保留 GTOCore 原清單
         }
         box.setVisible(false);
-        if (isCraftMode(screen.getMenu())) {
+        // 中鍵手勢：這批清單強制開面板、跳過所有自動直傳（消費即清）
+        boolean force = forcePanel;
+        forcePanel = false;
+        if (!force && isCraftMode(screen.getMenu())) {
             // 合成/鍛造/切石樣板：只有分子裝配室/裝配矩陣能做。伺服端 gto$craftFirst 對這些容器
             // 不可靠（isCraftingContainer 沒實作、平手看網路迭代順序，分子裝配室可能排最後），
             // 所以客戶端自己以 icon 認合成容器：挑第一個未滿的合成容器直傳；全滿 → 停止動作。
@@ -227,7 +237,7 @@ public final class PatternUploadClient {
         }
         // 處理樣板：收集所有「明確匹配」的目的地（tier 0 手動指定吻合 / tier 1 機器類型吻合）。
         // 剛好一個 → 直傳；多個 → 開面板讓玩家自選（不亂猜）；零個 → 開面板。
-        GTRecipeType current = currentRecipeType(screen.getMenu());
+        GTRecipeType current = force ? null : currentRecipeType(screen.getMenu());
         if (current != null) {
             List<ListBoxReflector.Dest> matches = new java.util.ArrayList<>();
             for (var d : dests) {
@@ -281,9 +291,30 @@ public final class PatternUploadClient {
     @SubscribeEvent(priority = net.minecraftforge.eventbus.api.EventPriority.HIGHEST)
     public static void onMouseClick(ScreenEvent.MouseButtonPressed.Pre event) {
         var o = activeOverlay(event);
-        if (o != null && o.mouseClicked(event.getMouseX(), event.getMouseY(), event.getButton())) {
-            event.setCanceled(true);
+        if (o != null) {
+            if (o.mouseClicked(event.getMouseX(), event.getMouseY(), event.getButton())) {
+                event.setCanceled(true);
+            }
+            return;
         }
+        // 無面板時：中鍵點 GTOCore 上傳（編碼）鈕 → 要一批目的地清單但強制開面板（不自動上傳）
+        if (event.getButton() == GLFW.GLFW_MOUSE_BUTTON_MIDDLE
+                && event.getScreen() instanceof PatternEncodingTermScreen<?> screen
+                && screen instanceof IExtendedPatternEncodingTerm term) {
+            var btn = term.gto$getEncodeButton();
+            if (btn != null && overEncodeButton(btn, event.getMouseX(), event.getMouseY())) {
+                forcePanel = true;
+                ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendEncodeRequest();
+                event.setCanceled(true);
+                LOGGER.info("[pattern_upload] middle-click encode button → force panel (no auto-upload)");
+            }
+        }
+    }
+
+    /** 滑鼠是否落在上傳鈕矩形內（手動判界，不受按鈕 active 狀態影響）。 */
+    private static boolean overEncodeButton(appeng.client.gui.widgets.ActionButton btn, double mx, double my) {
+        return mx >= btn.getX() && mx < btn.getX() + btn.getWidth()
+                && my >= btn.getY() && my < btn.getY() + btn.getHeight();
     }
 
     @SubscribeEvent
@@ -330,6 +361,10 @@ public final class PatternUploadClient {
     public static void onScreenClosing(ScreenEvent.Closing event) {
         if (overlay != null && event.getScreen() == overlay.screen()) {
             overlay = null;
+        }
+        // 關終端就清中鍵旗標，避免無效樣板（伺服端沒回清單）殘留到下次右鍵誤觸
+        if (event.getScreen() instanceof PatternEncodingTermScreen<?>) {
+            forcePanel = false;
         }
     }
 
