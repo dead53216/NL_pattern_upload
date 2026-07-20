@@ -52,6 +52,10 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 - **置頂**：`Render.Post` 監聽器設 `EventPriority.LOWEST`（最後畫）→ 面板蓋過 EMI/JEI 右側物品；
   點擊 `MouseButtonPressed.Pre` 設 `HIGHEST`（最先吃）→ 面板先接管點擊，物品瀏覽器搶不走。
 - ESC：MACHINE_SELECT → 回清單 → 關 overlay → 關終端；搜尋欄聚焦時吞按鍵避免 `E` 關閉介面。
+- **效能**：`currentRecipeType` 是唯一 per-frame 重活（`render` 每幀經 headerIcon＋headerTitle 觸發，
+  內層掃該機器類型整張配方表）→ 以 (menu, `gtocore$recipe`, 產物槽簽章) 快取，樣板不變即零重掃。
+  `rebuildRows` 單趟預算每列 posKey/有效機器/tier（decorate-sort），免 comparator 與顯示各自重呼 `machineFor`。
+  伺服端 `resolveSuggestedMachine` 以子網 grid 為鍵在單次 request 內快取，共享子網不重掃。待機時全 mod 零 per-tick 工作。
 
 ## 架構（1.20.1/forge）— v1.1「零 mixin 劫持」
 

@@ -168,16 +168,26 @@ final class UploadOverlay {
             //（gto$craftFirst 已把分子裝配室/裝配矩陣排前）。
             boolean craft = PatternUploadClient.isCraftMode(screen.getMenu());
             GTRecipeType current = craft ? null : PatternUploadClient.currentRecipeType(screen.getMenu());
-            List<ListBoxReflector.Dest> ordered = new ArrayList<>(destinations);
-            if (current != null) {
-                ordered.sort(Comparator.comparingInt(d -> sortTier(d, current)));
-            }
-            for (var dest : ordered) {
-                String providerName = dest.name().getString();
+            // 單趟預算：每 dest 只算一次 posKey/manual/suggestion/effective/tier，
+            // 避免 comparator（sortTier）每次比較與 isSuggested 各自重呼 machineFor/suggestionFor。
+            record Pre(ListBoxReflector.Dest dest, String posKey, GTRecipeType effective, boolean suggested, int tier) {}
+            List<Pre> pre = new ArrayList<>(destinations.size());
+            for (var dest : destinations) {
                 String posKey = PatternUploadClient.posKeyFor(dest.index());
-                // 有效機器＝手動指定優先，無則伺服端建議（接口→子網→存儲總線解析）
-                GTRecipeType assigned = craft ? null : PatternUploadClient.effectiveMachineFor(dest.index(), providerName);
-                boolean suggested = assigned != null && PatternUploadClient.isSuggested(dest.index(), providerName);
+                GTRecipeType manual = craft ? null : PatternUploadConfig.machineFor(posKey, dest.name().getString());
+                GTRecipeType sug = craft ? null : PatternUploadClient.suggestionFor(dest.index());
+                GTRecipeType effective = manual != null ? manual : sug; // 有效機器＝手動指定優先，無則建議
+                boolean suggested = manual == null && sug != null;       // 有效機器來自建議（非手動）→ 青色標示
+                int tier = current == null ? 0 : sortTier(dest, current, effective);
+                pre.add(new Pre(dest, posKey, effective, suggested, tier));
+            }
+            if (current != null) {
+                pre.sort(Comparator.comparingInt(Pre::tier)); // 穩定排序，同層維持伺服端順序
+            }
+            for (var p : pre) {
+                var dest = p.dest();
+                String providerName = dest.name().getString();
+                GTRecipeType assigned = p.effective();
                 Component display = dest.name();
                 String filterText = providerName;
                 if (assigned != null) {
@@ -191,9 +201,9 @@ final class UploadOverlay {
                 }
                 if (assigned != null) {
                     rows.add(new Row(RecipeTypeIcons.icon(assigned), null, display, dest.full(), dest.index(), assigned,
-                            providerName, posKey, suggested));
+                            providerName, p.posKey(), p.suggested()));
                 } else {
-                    rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName, posKey, false));
+                    rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName, p.posKey(), false));
                 }
             }
         } else {
@@ -217,13 +227,17 @@ final class UploadOverlay {
      * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型；3 無法判定；4 手動指定但不吻合；5 滿槽。
      */
     static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
+        // 有效機器＝手動指定優先，無則伺服端建議；委派給帶預算值的多載（外部呼叫者用此便捷版）
+        return sortTier(d, current, PatternUploadClient.effectiveMachineFor(d.index(), d.name().getString()));
+    }
+
+    /** 同 {@link #sortTier(ListBoxReflector.Dest, GTRecipeType)}，但吃已算好的有效機器（rebuildRows 單趟預算用，免重算）。 */
+    static int sortTier(ListBoxReflector.Dest d, GTRecipeType current, @org.jetbrains.annotations.Nullable GTRecipeType effective) {
         if (d.full()) {
             return 5;
         }
-        // 有效機器＝手動指定優先，無則伺服端建議；兩者皆讓吻合者浮頂、不吻合者下沉
-        GTRecipeType assigned = PatternUploadClient.effectiveMachineFor(d.index(), d.name().getString());
-        if (assigned != null) {
-            return RecipeTypeIcons.matchesType(assigned, current) ? 0 : 4;
+        if (effective != null) {
+            return RecipeTypeIcons.matchesType(effective, current) ? 0 : 4;
         }
         var iconTypes = RecipeTypeIcons.typesForIcon(d.icon());
         if (iconTypes != null) {

@@ -162,6 +162,9 @@ public final class Network {
             long[] packed = new long[n];
             ResourceLocation[] dims = new ResourceLocation[n];
             String[] suggest = new String[n];
+            // request 範圍內以子網 grid 為鍵快取建議機器：多個供應器橋接同一子網時只掃一次
+            //（grid 拓撲在單一同步 runnable 內不變 → 恆等）
+            java.util.IdentityHashMap<IGrid, String> gridCache = new java.util.IdentityHashMap<>();
             for (int i = 0; i < n; i++) {
                 Object o = containers.get(i);
                 suggest[i] = "";
@@ -172,7 +175,7 @@ public final class Network {
                         dims[i] = level.dimension().location();
                         packed[i] = pos.asLong();
                     }
-                    suggest[i] = resolveSuggestedMachine(ippc);
+                    suggest[i] = resolveSuggestedMachine(ippc, gridCache);
                 }
             }
             CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new ReplyS2C(msg.gen(), packed, dims, suggest));
@@ -196,7 +199,8 @@ public final class Network {
      * 直接貼機器者（相鄰即 {@link MetaMachineBlockEntity}）GTOCore 已能判 → 這裡回 ""（不重複）。
      * 接口子網掃到**唯一**一台有配方類型的機器才建議；0 台或多台（歧義）皆回 ""。任何例外 → ""（退舊行為）。
      */
-    private static String resolveSuggestedMachine(IExtendedPatternContainer.IPPPC ippc) {
+    private static String resolveSuggestedMachine(IExtendedPatternContainer.IPPPC ippc,
+                                                  java.util.IdentityHashMap<IGrid, String> gridCache) {
         try {
             BlockEntity adj = IExtendedPatternContainer.getPushBlockEntity(ippc);
             if (adj == null || adj instanceof MetaMachineBlockEntity) {
@@ -206,33 +210,44 @@ public final class Network {
             if (grid == null) {
                 return "";
             }
-            Set<GTRecipeType> found = new HashSet<>();
-            for (var machineClass : grid.getMachineClasses()) {
-                if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
-                    continue;
-                }
-                for (Object m : grid.getActiveMachines(machineClass)) {
-                    if (!(m instanceof StorageBusPart sb)) {
-                        continue;
-                    }
-                    BlockEntity busHost = sb.getHost().getBlockEntity();
-                    if (busHost == null || busHost.getLevel() == null) {
-                        continue;
-                    }
-                    BlockPos target = busHost.getBlockPos().relative(sb.getSide());
-                    GTRecipeType rt = recipeTypeOf(busHost.getLevel().getBlockEntity(target));
-                    if (rt != null) {
-                        found.add(rt);
-                        if (found.size() > 1) {
-                            return ""; // 子網多台機器 → 歧義，不猜
-                        }
-                    }
-                }
+            String cached = gridCache.get(grid);
+            if (cached != null) {
+                return cached; // 同一子網已掃過（含解析為 "" 的情形）
             }
-            return found.size() == 1 ? found.iterator().next().registryName.toString() : "";
+            String result = scanSubnetForMachine(grid);
+            gridCache.put(grid, result);
+            return result;
         } catch (Throwable t) {
             return "";
         }
+    }
+
+    /** 掃子網上所有存儲總線、算各自貼的機器配方類型；唯一一台回其 registry id，0／多台（歧義）回 ""。 */
+    private static String scanSubnetForMachine(IGrid grid) {
+        Set<GTRecipeType> found = new HashSet<>();
+        for (var machineClass : grid.getMachineClasses()) {
+            if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
+                continue;
+            }
+            for (Object m : grid.getActiveMachines(machineClass)) {
+                if (!(m instanceof StorageBusPart sb)) {
+                    continue;
+                }
+                BlockEntity busHost = sb.getHost().getBlockEntity();
+                if (busHost == null || busHost.getLevel() == null) {
+                    continue;
+                }
+                BlockPos target = busHost.getBlockPos().relative(sb.getSide());
+                GTRecipeType rt = recipeTypeOf(busHost.getLevel().getBlockEntity(target));
+                if (rt != null) {
+                    found.add(rt);
+                    if (found.size() > 1) {
+                        return ""; // 子網多台機器 → 歧義，不猜
+                    }
+                }
+            }
+        }
+        return found.size() == 1 ? found.iterator().next().registryName.toString() : "";
     }
 
     /** 從方塊實體取其所在 AE 網路（子網）；接口 BE 走 IActionHost，退 IInWorldGridNodeHost。 */
