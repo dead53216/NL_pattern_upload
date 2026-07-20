@@ -38,6 +38,11 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   （伺服端反射 `gto$currentContainers` 逐個取 `IPPPC.gto$getBlockPos()`＋維度，照 index 回傳），
   ~1 tick 後回來刷新面板；指定即以座標為鍵（`pos:<dim>#<packedLong>`）落盤 → **每台機器各自獨立**，同名也分得開。
   伺服端沒裝本 mod／收不到座標 → 自動退回名稱鍵（舊行為）。座標非同步、僅精修顯示與指定，不影響同步的自動直傳決策。
+- **建議機器（接口→存儲總線自動解析）**：接口類供應器 GTOCore 判不出機器。伺服端沿固定拓撲解析——
+  供應器推送面貼 ME 接口 → 接口子網上的**存儲總線** → 總線貼的機器（`busPos.relative(side)`）→ 取其配方類型
+  （子網掃到**唯一**一台才建議，0／多台歧義不猜；直接貼機器者 GTOCore 已判、不重複）。座標封包一併回傳。
+  客戶端**有效機器＝手動指定 ?? 伺服端建議**：不用手點就顯示對的機器、吻合者浮頂；建議**不落盤**
+  （每次伺服端即時重算，永遠正確），手動指定仍可覆寫。建議列機器名以**青色**標示、與手動指定（白）區分。
 - 供應器被指定後：icon 換成指定的機器，**兩行顯示**——第一行機器名，第二行括號放 GTOCore 給的清單標籤
   （沒改名照放；供應器改名後 GTOCore 自動給自訂名 → 括號顯示自訂名，可分辨同名供應器）。
 - **通用工廠換行**：名稱為「通用工廠 - 子機器」格式者拆兩行（第一行「通用工廠」、第二行子機器名）；
@@ -59,7 +64,7 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 | `client/ListBoxReflector` | 反射讀 `AESearchPatternProviderListBox.allItems`（SimpleItem: index/icon/name/full；已對照 0.5.6-alpha/beta/26.7.x），失敗自動退回原介面 |
 | `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、標題列拖曳、右下角縮放、本地重排 |
 | `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器鍵→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器鍵優先「世界座標」（`pos:<dim>#<packedLong>`，同名獨立），無座標退「顯示名稱」（相容舊設定） |
-| `net/Network` | 目的地座標同步（自建封包，雙端註冊）：C2S 請求（帶 windowId＋gen 世代號）→ 伺服端反射 `gto$currentContainers` 逐個取座標＋維度照 index 回 S2C；client 以 gen 過濾過期回覆。**唯一非純客戶端元件**（伺服端也需裝，多人才有座標；單機自動雙端） |
+| `net/Network` | 目的地座標＋建議機器同步（自建封包，雙端註冊）：C2S 請求（帶 windowId＋gen 世代號）→ 伺服端反射 `gto$currentContainers` 逐個取座標＋維度、並解析建議機器（接口→子網 grid→存儲總線→總線貼的機器→配方類型），照 index 回 S2C；client 以 gen 過濾過期回覆。**唯一非純客戶端元件**（伺服端也需裝，多人才有座標／建議；單機自動雙端） |
 | `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
 
@@ -94,6 +99,8 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 - **Java 21 toolchain**（非一般 1.20.1 mod 的 17）：gto 全家 jar 為 Java 21 class files，整合包也以 Java 21 執行。
 - 依賴（全 `compileOnly`，runtime 由整合包提供）自 `maven.gtodyssey.com/releases`：
   `com.gto:gtocore-forge-1.20.1`、`com.gto:gtolib-forge-1.20.1`、`com.gregtechceu.gtceu:gtceu-1.20.1-forge-1.20.1`、`appeng:appliedenergistics2-forge-1.20.1`、`com.gto:datasynclib-forge-1.20.1`（GTRegistry 基類）。
+- 外加 **LowDragLib（ldlib）** 自 CurseForge（`cursemaven.com`，`curse.maven:ldlib-626676:<fileId>`，對齊 GTOCore 1.0.48）：
+  `net/Network` 解析建議機器時用到 GTCEu `IMultiPart`，其型別階層含 ldlib 的 `IUIHolder`，缺它 `instanceof` 編不過。
 - 該 maven 的 module metadata 已在 repo 宣告 `metadataSources { mavenPom(); artifact() }` 忽略（其 `.module` 綁 JVM21 屬性）。
 - `mods.toml` 強制依賴 `gtocore`。
 - **dev 測試注意**：`build/libs` 的 jar（含 `-slim`）全被 FG6 reobf 成 SRG，**不能**丟進 moddev dev 環境；

@@ -85,7 +85,7 @@ final class UploadOverlay {
     private final Set<Integer> selected = new HashSet<>();
 
     private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type,
-                       String providerName, @org.jetbrains.annotations.Nullable String posKey) {}
+                       String providerName, @org.jetbrains.annotations.Nullable String posKey, boolean suggested) {}
 
     UploadOverlay(PatternEncodingTermScreen<?> screen, java.util.List<ListBoxReflector.Dest> destinations) {
         this.screen = screen;
@@ -175,11 +175,13 @@ final class UploadOverlay {
             for (var dest : ordered) {
                 String providerName = dest.name().getString();
                 String posKey = PatternUploadClient.posKeyFor(dest.index());
-                GTRecipeType assigned = craft ? null : PatternUploadConfig.machineFor(posKey, providerName);
+                // 有效機器＝手動指定優先，無則伺服端建議（接口→子網→存儲總線解析）
+                GTRecipeType assigned = craft ? null : PatternUploadClient.effectiveMachineFor(dest.index(), providerName);
+                boolean suggested = assigned != null && PatternUploadClient.isSuggested(dest.index(), providerName);
                 Component display = dest.name();
                 String filterText = providerName;
                 if (assigned != null) {
-                    // 已指定：icon 換成指定的機器；第一行只放機器名，原標籤（改名後的自訂名）換行放括號裡（見 render）。
+                    // 已判定機器：icon 換成該機器；第一行只放機器名，原標籤（改名後的自訂名）換行放括號裡（見 render）。
                     String machineName = RecipeTypeIcons.name(assigned).getString();
                     display = Component.literal(machineName);
                     filterText = machineName + " (" + providerName + ")";
@@ -189,22 +191,22 @@ final class UploadOverlay {
                 }
                 if (assigned != null) {
                     rows.add(new Row(RecipeTypeIcons.icon(assigned), null, display, dest.full(), dest.index(), assigned,
-                            providerName, posKey));
+                            providerName, posKey, suggested));
                 } else {
-                    rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName, posKey));
+                    rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName, posKey, false));
                 }
             }
         } else {
             if (filter.isEmpty() && PatternUploadConfig.machineFor(selectingPosKey, selectingName) != null) {
                 rows.add(new Row(RecipeTypeIcons.patternIcon(), null,
-                        Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null, "", null));
+                        Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null, "", null, false));
             }
             for (GTRecipeType type : RecipeTypeIcons.allTypes()) {
                 Component name = RecipeTypeIcons.name(type);
                 if (!PinyinMatch.matches(name.getString(), filter)) {
                     continue;
                 }
-                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, "", null));
+                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, "", null, false));
             }
         }
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - maxRows));
@@ -218,8 +220,8 @@ final class UploadOverlay {
         if (d.full()) {
             return 5;
         }
-        GTRecipeType assigned = PatternUploadConfig.machineFor(
-                PatternUploadClient.posKeyFor(d.index()), d.name().getString());
+        // 有效機器＝手動指定優先，無則伺服端建議；兩者皆讓吻合者浮頂、不吻合者下沉
+        GTRecipeType assigned = PatternUploadClient.effectiveMachineFor(d.index(), d.name().getString());
         if (assigned != null) {
             return RecipeTypeIcons.matchesType(assigned, current) ? 0 : 4;
         }
@@ -360,10 +362,12 @@ final class UploadOverlay {
             String fullTag = (mode == Mode.DESTINATIONS && row.full())
                     ? " [" + Component.translatable("pattern_upload.full").getString() + "]" : "";
             if (mode == Mode.DESTINATIONS && row.type() != null && !row.providerName().isEmpty()) {
-                // 已指定：第一行機器名，第二行括號放（改名後的）原標籤；「通用工廠 - 子機器」只留子機器。
+                // 已判定機器：第一行機器名，第二行括號放（改名後的）原標籤；「通用工廠 - 子機器」只留子機器。
+                // 機器名顏色：手動指定＝白；伺服端建議（接口→存儲總線自動解析）＝青色標示，可分辨並提醒可手動覆寫。
                 String[] pf = splitFactoryName(row.providerName());
                 String label = pf != null ? pf[1] : row.providerName();
-                g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, w - 25), x + 21, ry + 1, color);
+                int nameColor = row.full() ? 0x777777 : (row.suggested() ? 0x66CCFF : color);
+                g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, w - 25), x + 21, ry + 1, nameColor);
                 g.drawString(font, font.plainSubstrByWidth("(" + label + ")", w - 25), x + 21, ry + 9, 0x999999);
             } else {
                 // 未指定：「通用工廠 - 子機器」拆兩行（通用工廠 / 子機器），其餘單行置中。

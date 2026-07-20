@@ -53,6 +53,9 @@ public final class PatternUploadClient {
     private static ResourceLocation[] posDims = null;
     @Nullable
     private static long[] posPacked = null;
+    /** 伺服端建議機器（配方類型 registry id，照 index 對齊；空字串＝無建議）。接口→子網→存儲總線解析而來。 */
+    @Nullable
+    private static String[] posSuggest = null;
 
     static {
         LOGGER.info("[pattern_upload] PatternUploadClient loaded (hijack mode, no mixin)");
@@ -66,10 +69,11 @@ public final class PatternUploadClient {
 
     // ------------------------------------------------------ 目的地座標同步
 
-    /** 開面板時呼叫：清掉上一批座標、發請求要這批目的地的世界座標（伺服端有裝本 mod 才會回）。 */
+    /** 開面板時呼叫：清掉上一批座標／建議、發請求要這批目的地的世界座標＋建議機器（伺服端有裝本 mod 才會回）。 */
     private static void requestPositionsFor(AbstractContainerMenu menu) {
         posDims = null;
         posPacked = null;
+        posSuggest = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -85,10 +89,11 @@ public final class PatternUploadClient {
         }
         posDims = msg.dims();
         posPacked = msg.packed();
+        posSuggest = msg.suggest();
         if (overlay != null) {
             overlay.onPositionsUpdated();
         }
-        LOGGER.info("[pattern_upload] received {} destination positions (gen {})", msg.dims().length, msg.gen());
+        LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
     }
 
     /**
@@ -103,6 +108,32 @@ public final class PatternUploadClient {
             return null;
         }
         return "pos:" + dims[index] + "#" + packed[index];
+    }
+
+    /** 第 index 個目的地的伺服端建議機器（接口→子網→存儲總線解析）；無建議回 null。 */
+    @Nullable
+    static GTRecipeType suggestionFor(int index) {
+        String[] sug = posSuggest;
+        if (sug == null || index < 0 || index >= sug.length || sug[index] == null || sug[index].isEmpty()) {
+            return null;
+        }
+        ResourceLocation rl = ResourceLocation.tryParse(sug[index]);
+        return rl == null ? null : GTRegistries.RECIPE_TYPES.get(rl);
+    }
+
+    /**
+     * 第 index 個目的地的「有效機器」＝手動指定（座標／名稱鍵）優先，無則用伺服端建議。
+     * 供 overlay 顯示、排序、tier 判定共用；手動指定永遠蓋過建議。
+     */
+    @Nullable
+    static GTRecipeType effectiveMachineFor(int index, String providerName) {
+        GTRecipeType manual = PatternUploadConfig.machineFor(posKeyFor(index), providerName);
+        return manual != null ? manual : suggestionFor(index);
+    }
+
+    /** 第 index 個目的地的有效機器是否來自「建議」（非手動指定）——供 overlay 以不同色標示。 */
+    static boolean isSuggested(int index, String providerName) {
+        return PatternUploadConfig.machineFor(posKeyFor(index), providerName) == null && suggestionFor(index) != null;
     }
 
     /**
@@ -424,6 +455,7 @@ public final class PatternUploadClient {
             posGen++;
             posDims = null;
             posPacked = null;
+            posSuggest = null;
         }
     }
 
