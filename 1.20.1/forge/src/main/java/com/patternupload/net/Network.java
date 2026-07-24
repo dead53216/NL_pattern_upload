@@ -21,6 +21,8 @@ import net.minecraftforge.network.PacketDistributor;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 import com.gtocore.integration.ae.hooks.IExtendedPatternContainer;
+import com.gtocore.integration.ae.wireless.WirelessMachine;
+import com.gtocore.common.saved.WirelessNetworkSavedData;
 
 import com.gregtechceu.gtceu.api.blockentity.MetaMachineBlockEntity;
 import com.gregtechceu.gtceu.api.machine.MetaMachine;
@@ -30,8 +32,10 @@ import com.gregtechceu.gtceu.api.recipe.GTRecipeType;
 
 import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridNode;
+import appeng.api.networking.IManagedGridNode;
 import appeng.api.networking.IInWorldGridNodeHost;
 import appeng.api.networking.security.IActionHost;
+import appeng.me.helpers.IGridConnectedBlockEntity;
 import appeng.menu.me.items.PatternEncodingTermMenu;
 import appeng.parts.storagebus.StorageBusPart;
 
@@ -39,7 +43,12 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
 import java.lang.reflect.Field;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -70,6 +79,9 @@ public final class Network {
 
     private static Field containersField;
     private static boolean reflectBroken = false;
+
+    /** 跨無線連接機 BFS 掃描的 grid 上限（防環／防爆走；正常子網拓撲遠低於此）。 */
+    private static final int MAX_SCAN_GRIDS = 64;
 
     private Network() {}
 
@@ -198,6 +210,7 @@ public final class Network {
      * 拓撲（使用者固定擺法）：主網樣板供應器 → 推送面貼 ME 接口 → 接口子網上有存儲總線 → 總線貼機器。
      * 直接貼機器者（相鄰即 {@link MetaMachineBlockEntity}）GTOCore 已能判 → 這裡回 ""（不重複）。
      * 接口子網掃到**唯一**一台有配方類型的機器才建議；0 台或多台（歧義）皆回 ""。任何例外 → ""（退舊行為）。
+     * 子網若以 me無線連接機橋到遠端子網，掃描會跨橋一併涵蓋（見 {@link #scanSubnetForMachine}）。
      */
     private static String resolveSuggestedMachine(IExtendedPatternContainer.IPPPC ippc,
                                                   java.util.IdentityHashMap<IGrid, String> gridCache) {
@@ -222,32 +235,151 @@ public final class Network {
         }
     }
 
-    /** 掃子網上所有存儲總線、算各自貼的機器配方類型；唯一一台回其 registry id，0／多台（歧義）回 ""。 */
-    private static String scanSubnetForMachine(IGrid grid) {
+    /**
+     * 掃子網（含跨 me無線連接機橋接到的遠端子網）上所有存儲總線、算各自貼的機器配方類型；
+     * 唯一一台回其 registry id，0／多台（歧義）回 ""。
+     * <p>
+     * GTO 的 me無線連接機**不合併** AE grid（只用自家 {@code WirelessNetwork} 層橋接），故 {@link IGrid#getActiveMachines}
+     * 掃不過無線橋 → 遠端子網的存儲總線／機器看不到。這裡以 grid 為節點 BFS：每個 grid 先掃自己的存儲總線，
+     * 再找其上的無線連接機、把它配對到的遠端子網 grid 排入佇列（{@code visited} 去重、{@link #MAX_SCAN_GRIDS} 封頂防環）。
+     */
+    private static String scanSubnetForMachine(IGrid startGrid) {
         Set<GTRecipeType> found = new HashSet<>();
-        for (var machineClass : grid.getMachineClasses()) {
-            if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
-                continue;
+        Set<IGrid> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        Deque<IGrid> queue = new ArrayDeque<>();
+        visited.add(startGrid);
+        queue.add(startGrid);
+        int guard = 0;
+        while (!queue.isEmpty() && guard++ < MAX_SCAN_GRIDS) {
+            IGrid grid = queue.poll();
+            // 本 grid 的存儲總線 → 貼的機器
+            for (var machineClass : grid.getMachineClasses()) {
+                if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
+                    continue;
+                }
+                for (Object m : grid.getActiveMachines(machineClass)) {
+                    if (!(m instanceof StorageBusPart sb)) {
+                        continue;
+                    }
+                    BlockEntity busHost = sb.getHost().getBlockEntity();
+                    if (busHost == null || busHost.getLevel() == null) {
+                        continue;
+                    }
+                    BlockPos target = busHost.getBlockPos().relative(sb.getSide());
+                    GTRecipeType rt = recipeTypeOf(busHost.getLevel().getBlockEntity(target));
+                    if (rt != null) {
+                        found.add(rt);
+                        if (found.size() > 1) {
+                            return ""; // 多台機器 → 歧義，不猜
+                        }
+                    }
+                }
             }
-            for (Object m : grid.getActiveMachines(machineClass)) {
-                if (!(m instanceof StorageBusPart sb)) {
+            // 本 grid 的無線連接機 → 把它橋接到的遠端子網 grid 一併排入掃描
+            for (IGridNode node : grid.getNodes()) {
+                Object connector = asWirelessConnector(node.getOwner());
+                if (connector == null) {
                     continue;
                 }
-                BlockEntity busHost = sb.getHost().getBlockEntity();
-                if (busHost == null || busHost.getLevel() == null) {
-                    continue;
-                }
-                BlockPos target = busHost.getBlockPos().relative(sb.getSide());
-                GTRecipeType rt = recipeTypeOf(busHost.getLevel().getBlockEntity(target));
-                if (rt != null) {
-                    found.add(rt);
-                    if (found.size() > 1) {
-                        return ""; // 子網多台機器 → 歧義，不猜
+                for (IGrid peer : wirelessPeerGrids(connector)) {
+                    if (peer != null && visited.add(peer)) {
+                        queue.add(peer);
                     }
                 }
             }
         }
         return found.size() == 1 ? found.iterator().next().registryName.toString() : "";
+    }
+
+    /**
+     * grid node 的 owner 若是無線連接機（owner 直接是，或是其 MetaMachine）回該物件（以 {@link Object} 持有），否則 null。
+     * <p>
+     * 全程不把值靜態定型成 {@code WirelessMachine}：它繼承 gtmthings 的 {@code IBindable}（gtocore JiJ 內嵌、不在編譯
+     * classpath），一旦 javac 需在該型別上判子型別或解成員就會強制載入 {@code IBindable} 而編不過。故僅以
+     * {@code Object instanceof WirelessMachine}（運算元為 {@code Object}、判定為 trivial）作辨識，成員存取一律走反射／降型呼叫。
+     */
+    @Nullable
+    private static Object asWirelessConnector(Object owner) {
+        if (owner instanceof WirelessMachine) {
+            return owner;
+        }
+        if (owner instanceof MetaMachineBlockEntity be) {
+            Object mm = be.getMetaMachine();
+            if (mm instanceof WirelessMachine) {
+                return mm;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 無線連接機所在 GTO 無線網路的其他節點（配對端）各自的 AE 子網 grid。
+     * <p>
+     * GTO 無線層的成員存取全走**反射**：{@code WirelessMachine} 繼承 gtmthings {@code IBindable}、
+     * {@code getNetworkPool()} 回 fastcollection 型別，兩者皆 gtocore JiJ 內嵌、不在編譯 classpath，
+     * 以其型別直呼會編不過。GTO 自有方法名不經 Forge SRG remap（shipped jar 即真名）→ 字串反射在正式包穩定
+     *（同本檔既有 {@code gto$currentContainers}）。AE2 側（{@code getMainNode/getNode/getGrid}）走直呼、由 Forge remap。
+     * 任何失敗（無網路 id／SavedData 未初始化／API 變動）回空清單＝不跨橋（退舊行為，零回歸風險）。
+     */
+    private static List<IGrid> wirelessPeerGrids(Object self) {
+        List<IGrid> out = new ArrayList<>();
+        try {
+            Object netIdObj = self.getClass().getMethod("getConnectedNetworkId").invoke(self);
+            if (!(netIdObj instanceof String netId) || netId.isEmpty()) {
+                return out;
+            }
+            Object savedData = WirelessNetworkSavedData.getINSTANCE();
+            if (savedData == null) {
+                return out;
+            }
+            Object pool = savedData.getClass().getMethod("getNetworkPool").invoke(savedData);
+            if (pool == null) {
+                return out;
+            }
+            Object net = pool.getClass().getMethod("get", Object.class).invoke(pool, netId);
+            if (net == null) {
+                return out;
+            }
+            addPeerGrids(out, net.getClass().getMethod("getInputNodes").invoke(net), self);
+            addPeerGrids(out, net.getClass().getMethod("getOutputNodes").invoke(net), self);
+        } catch (Throwable t) {
+            // 反射失敗／API 變動 → 不跨橋
+        }
+        return out;
+    }
+
+    /** 把一組無線節點（反射得到的 {@code ReferenceOpenHashSet<WirelessMachine>}，以 {@link Iterable} 持有）除自己外各自的 grid 收進 out。 */
+    private static void addPeerGrids(List<IGrid> out, Object nodesObj, Object self) {
+        if (!(nodesObj instanceof Iterable<?> nodes)) {
+            return;
+        }
+        for (Object peer : nodes) {
+            if (peer == null || peer == self) {
+                continue;
+            }
+            IGrid g = gridOfWireless(peer);
+            if (g != null) {
+                out.add(g);
+            }
+        }
+    }
+
+    /** 無線連接機自身的 AE 子網 grid（其 mainNode 所在網路）；直呼 AE2 API（SRG-safe），未上線／無節點回 null。 */
+    @Nullable
+    private static IGrid gridOfWireless(Object connector) {
+        try {
+            if (!(connector instanceof IGridConnectedBlockEntity gc)) {
+                return null;
+            }
+            IManagedGridNode mn = gc.getMainNode();
+            if (mn == null) {
+                return null;
+            }
+            IGridNode node = mn.getNode();
+            return node == null ? null : node.getGrid();
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /** 從方塊實體取其所在 AE 網路（子網）；接口 BE 走 IActionHost，退 IInWorldGridNodeHost。 */

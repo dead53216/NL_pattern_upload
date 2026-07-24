@@ -41,6 +41,12 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 - **建議機器（接口→存儲總線自動解析）**：接口類供應器 GTOCore 判不出機器。伺服端沿固定拓撲解析——
   供應器推送面貼 ME 接口 → 接口子網上的**存儲總線** → 總線貼的機器（`busPos.relative(side)`）→ 取其配方類型
   （子網掃到**唯一**一台才建議，0／多台歧義不猜；直接貼機器者 GTOCore 已判、不重複）。座標封包一併回傳。
+  - **跨 me無線連接機**：GTO 的無線連接機**不合併** AE grid（只用自家 `WirelessNetwork` 層橋接）→ 遠端子網的
+    存儲總線／機器 `IGrid.getActiveMachines` 掃不到。故解析改成「以 grid 為節點 BFS」：每個 grid 先掃自己的存儲總線，
+    再找其上的無線連接機（`node.getOwner()` 是 `WirelessMachine`）、循 `connectedNetworkId` 取 `WirelessNetwork` 的
+    input/output 節點、把配對端各自的子網 grid 排入佇列續掃（`visited` 去重、上限 `MAX_SCAN_GRIDS=64` 防環）。
+    `WirelessNetworkSavedData.networkPool` 型別是 gtocore JiJ 內嵌的 fastcollection、不在編譯 classpath → **該一跳走反射**
+    （GTO 自有類名不經 SRG remap，穩定）；任何失敗回不跨橋（退舊行為）。唯一機型才建議，跨橋後多機型仍算歧義回 ""。
   客戶端**有效機器＝手動指定 ?? 伺服端建議**：不用手點就顯示對的機器、吻合者浮頂；建議**不落盤**
   （每次伺服端即時重算，永遠正確），手動指定仍可覆寫。建議列機器名以**青色**標示、與手動指定（白）區分。
 - **自動直傳決策延到座標／建議到齊再判**（`decidePending`）：劫持清單後不立即決策，先向伺服端要座標＋建議，
@@ -73,7 +79,7 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 | `client/ListBoxReflector` | 反射讀 `AESearchPatternProviderListBox.allItems`（SimpleItem: index/icon/name/full；已對照 0.5.6-alpha/beta/26.7.x），失敗自動退回原介面 |
 | `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、標題列拖曳、右下角縮放、本地重排 |
 | `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器鍵→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器鍵優先「世界座標」（`pos:<dim>#<packedLong>`，同名獨立），無座標退「顯示名稱」（相容舊設定） |
-| `net/Network` | 目的地座標＋建議機器同步（自建封包，雙端註冊）：C2S 請求（帶 windowId＋gen 世代號）→ 伺服端反射 `gto$currentContainers` 逐個取座標＋維度、並解析建議機器（接口→子網 grid→存儲總線→總線貼的機器→配方類型），照 index 回 S2C；client 以 gen 過濾過期回覆。**唯一非純客戶端元件**（伺服端也需裝，多人才有座標／建議；單機自動雙端） |
+| `net/Network` | 目的地座標＋建議機器同步（自建封包，雙端註冊）：C2S 請求（帶 windowId＋gen 世代號）→ 伺服端反射 `gto$currentContainers` 逐個取座標＋維度、並解析建議機器（接口→子網 grid→存儲總線→總線貼的機器→配方類型），照 index 回 S2C；client 以 gen 過濾過期回覆。子網掃描以 grid 為節點 BFS、跨 me無線連接機橋接的遠端子網（`WirelessNetwork` 節點循 grid 續掃，`MAX_SCAN_GRIDS` 封頂）。**唯一非純客戶端元件**（伺服端也需裝，多人才有座標／建議；單機自動雙端） |
 | `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
 
@@ -131,3 +137,5 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 - 座標／建議為非同步（劫持清單後 ~1–2 tick 才到）：處理樣板的自動直傳決策**延到其到齊再判**（見「功能」的
   `decidePending`），故接口類子網機器也能正確算進匹配、避免誤直傳。伺服端沒裝本 mod → 逾時後以名稱鍵照舊決策。
   合成類樣板不走延遲、仍同步（只認分子裝配室/裝配矩陣，與座標無關）。
+- 建議機器跨 me無線連接機：GTO 無線連接**不合併** AE grid，故伺服端 BFS 跨橋掃描（見「功能」）。跨橋後若涵蓋
+  **多種**機型仍算歧義、不建議（回 ""）；只在全網唯一機型時建議。GTO 無線 API 走反射，版本大改 API 名時自動退回不跨橋。
