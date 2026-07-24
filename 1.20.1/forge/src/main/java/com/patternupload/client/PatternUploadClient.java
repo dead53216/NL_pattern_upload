@@ -183,15 +183,17 @@ public final class PatternUploadClient {
             return null; // 殘留的 gtocore$recipe 不適用於合成類樣板
         }
         String recipe = readGtoRecipe(menu);
-        if (recipe == null || recipe.isEmpty()) {
-            return null;
-        }
         // 鍵：配方 id 字串 + 產物槽簽章（皆便宜）；命中即跳過整張配方表掃描
         String key = recipe + ' ' + outputSignature(menu);
         if (menu == crtMenu && key.equals(crtKey)) {
             return crtVal;
         }
-        GTRecipeType result = computeCurrentRecipeType(menu, recipe);
+        GTRecipeType result = (recipe != null && !recipe.isEmpty())
+                ? computeCurrentRecipeType(menu, recipe) : null;
+        if (result == null) {
+            // gtocore$recipe 空（原版燒煉等 proxy 配方）或殘留對不上，反查 proxy 機器
+            result = proxyRecipeTypeFor(menu);
+        }
         crtMenu = menu;
         crtKey = key;
         crtVal = result;
@@ -249,6 +251,66 @@ public final class PatternUploadClient {
             return null;
         }
         return typeProducesPatternOutput(menu, type) ? type : null;
+    }
+
+    /**
+     * gtocore$recipe 認不出時的後備：靠「編碼格產物能否由某 GTRecipeType 委派（proxy）的原版配方做出」反查機器。
+     * <p>
+     * gtceu 電力熔爐（FURNACE_RECIPES）不把原版燒煉配方收進自己的 recipes，而是 proxyRecipes = {minecraft:smelting}
+     * 委派原版 RecipeManager；且 GTOCore 只在樣板帶 GTRecipeDefinition 時才填 gtocore$recipe，原版燒煉樣板該欄位為空。
+     * 兩者疊加使原本一律回 null（面板顯示未知機器）。這裡改查客戶端 RecipeManager 的 proxy 配方產物：
+     * 唯一命中一種機器類型才回傳（多種歧義不猜、開面板，與既有哲學一致）。
+     */
+    @Nullable
+    private static GTRecipeType proxyRecipeTypeFor(AbstractContainerMenu menu) {
+        try {
+            if (!(menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm)) {
+                return null;
+            }
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.level == null) {
+                return null;
+            }
+            // 收集編碼格產出的物品鍵（proxy 配方皆物品產出；流體略過）
+            List<appeng.api.stacks.AEItemKey> outs = new java.util.ArrayList<>();
+            for (var slot : petm.getProcessingOutputSlots()) {
+                net.minecraft.world.item.ItemStack st = slot.getItem();
+                if (st.isEmpty()) {
+                    continue;
+                }
+                appeng.api.stacks.GenericStack gs = appeng.api.stacks.GenericStack.unwrapItemStack(st);
+                appeng.api.stacks.AEKey k = gs != null ? gs.what() : appeng.api.stacks.AEItemKey.of(st);
+                if (k instanceof appeng.api.stacks.AEItemKey ik) {
+                    outs.add(ik);
+                }
+            }
+            if (outs.isEmpty()) {
+                return null;
+            }
+            net.minecraft.world.item.crafting.RecipeManager rm = mc.level.getRecipeManager();
+            net.minecraft.core.RegistryAccess ra = mc.level.registryAccess();
+            java.util.Set<GTRecipeType> matched = new java.util.HashSet<>();
+            for (var e : RecipeTypeIcons.proxyOwners().entrySet()) {
+                @SuppressWarnings({"unchecked", "rawtypes"})
+                List<? extends net.minecraft.world.item.crafting.Recipe<?>> list =
+                        rm.getAllRecipesFor((net.minecraft.world.item.crafting.RecipeType) e.getKey());
+                for (net.minecraft.world.item.crafting.Recipe<?> r : list) {
+                    net.minecraft.world.item.ItemStack result = r.getResultItem(ra);
+                    if (result.isEmpty()) {
+                        continue;
+                    }
+                    appeng.api.stacks.AEItemKey rk = appeng.api.stacks.AEItemKey.of(result);
+                    if (rk != null && outs.contains(rk)) {
+                        matched.addAll(e.getValue());
+                        break;
+                    }
+                }
+            }
+            // 唯一機器類型才回傳；多種能做則歧義不猜（回 null 開面板）
+            return matched.size() == 1 ? matched.iterator().next() : null;
+        } catch (Throwable t) {
+            return null; // API 異動/查不到，未知機器（開面板讓玩家自選）
+        }
     }
 
     /**

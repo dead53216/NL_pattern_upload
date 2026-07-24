@@ -7,6 +7,7 @@ import com.gregtechceu.gtceu.api.registry.GTRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.RecipeType;
 
 import appeng.api.stacks.AEItemKey;
 import appeng.api.stacks.AEKey;
@@ -32,6 +33,8 @@ public final class RecipeTypeIcons {
     private static List<GTRecipeType> sortedTypes;
     /** 機器本地化名稱 → 其支援的配方類型（供應器名稱比對用；ProcessingPlantMachine 通用工廠靠這辨識子機器）。 */
     private static List<MachineName> machineNames;
+    /** 原版 RecipeType（如 minecraft:smelting）→ 以它為 proxy 且有代表機器的 GTRecipeType。 */
+    private static Map<RecipeType<?>, Set<GTRecipeType>> proxyOwners;
 
     private record MachineName(String name, Set<GTRecipeType> types) {}
 
@@ -143,6 +146,26 @@ public final class RecipeTypeIcons {
     /** 配方類型顯示名（沿用 GTOCore 慣例的 lang key）。 */
     public static Component name(GTRecipeType type) {
         return Component.translatable("gtceu." + type.registryName.getPath());
+    }
+
+    /**
+     * 原版 RecipeType → 把它列為 proxy 的 GTRecipeType（僅含有代表機器者）。
+     * <p>
+     * gtceu 電力熔爐（FURNACE_RECIPES）不把原版燒煉配方收進自己的 {@code recipes}，而是
+     * proxyRecipes = {minecraft:smelting} 委派原版 RecipeManager。故要靠這張反查表，
+     * 才認得出「燒煉樣板 → 熔爐機器」（GTOCore 對原版燒煉樣板不填 gtocore$recipe）。
+     */
+    static Map<RecipeType<?>, Set<GTRecipeType>> proxyOwners() {
+        buildCache();
+        if (proxyOwners == null) {
+            proxyOwners = new HashMap<>();
+            for (GTRecipeType type : iconCache.keySet()) {
+                for (RecipeType<?> vanilla : type.getProxyRecipes()) {
+                    proxyOwners.computeIfAbsent(vanilla, k -> new HashSet<>()).add(type);
+                }
+            }
+        }
+        return proxyOwners;
     }
 
     /** 所有已知配方類型，依本地化名稱排序（只含有代表機器的，選了才有意義）。 */

@@ -101,6 +101,12 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   逐條比 `itemOutputs`／`fluidOutputs` 對編碼格產出物。對不上 → 回 null（面板顯示未知、不自動上傳）。
   流體產物在 FakeSlot 是包成 wrapper item，用公開 API `GenericStack.unwrapItemStack` 解出 fluid key
   （不反射 private `encodedOutputsInv`——其欄位名正式包 reobf 後會 SRG 失配），以 `testAeKay` 比對。
+- **原版燒煉等 proxy 配方後備**（`proxyRecipeTypeFor`）：`gtocore$recipe` 只在樣板帶 `GTRecipeDefinition` 時才填，
+  **原版燒煉樣板（圓石→磚等）該欄位為空**；且 gtceu 電力熔爐（`FURNACE_RECIPES`）不把原版燒煉配方收進 `recipes`，
+  而是以 `proxyRecipes = {minecraft:smelting}` 委派原版 `RecipeManager`。兩者疊加使燒煉樣板一律判成「未知機器」。
+  故 `currentRecipeType` 在 gtocore$recipe 判不出（空／殘留對不上）時後備：查客戶端 `RecipeManager` 中各 GTRecipeType
+  proxy 的原版配方（`GTRecipeType.getProxyRecipes()`，`RecipeTypeIcons.proxyOwners()` 反查表）——編碼格產物命中某 proxy
+  配方產出，即回其機器類型（熔爐＝`FURNACE_RECIPES`）。**唯一命中一種才回傳**，多種能做則歧義不猜、開面板。
 - 供應器指定純客戶端持久化（不寫樣板 NBT、不動伺服端）；v1.1 的「寫樣板 NBT 指定機器」路徑已移除。
 
 ## 建置注意
