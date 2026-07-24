@@ -236,46 +236,71 @@ public final class Network {
     }
 
     /**
-     * 掃子網（含跨 me無線連接機橋接到的遠端子網）上所有存儲總線、算各自貼的機器配方類型；
-     * 唯一一台回其 registry id，0／多台（歧義）回 ""。
+     * 掃子網上所有存儲總線、算各自貼的機器配方類型；唯一一台回其 registry id，0／多台（歧義）回 ""。
      * <p>
-     * GTO 的 me無線連接機**不合併** AE grid（只用自家 {@code WirelessNetwork} 層橋接），故 {@link IGrid#getActiveMachines}
-     * 掃不過無線橋 → 遠端子網的存儲總線／機器看不到。這裡以 grid 為節點 BFS：每個 grid 先掃自己的存儲總線，
-     * 再找其上的無線連接機、把它配對到的遠端子網 grid 排入佇列（{@code visited} 去重、{@link #MAX_SCAN_GRIDS} 封頂防環）。
+     * **本地優先**：先只掃「接口自己的子網」（原 1.11.x 行為）——本地有機器就以本地為準
+     *（單一→建議、多台→歧義），**不跨無線橋**。只有本地**完全沒有**機器時，才沿 me無線連接機 BFS
+     * 找遠端子網（GTO 無線連接不合併 AE grid、{@link IGrid#getActiveMachines} 掃不過橋；{@code visited}
+     * 去重、{@link #MAX_SCAN_GRIDS} 封頂防環）。
+     * <p>
+     * 為何本地優先：網路若全走無線橋，從任一接口子網 BFS 會撈到整網各子網的機器 → 幾乎必然多機型歧義 → 回 ""
+     *（本地明明有機器卻判不出）。本地優先確保「本地能判者一律照舊」，跨橋只當本地無機器時的補救、零回歸。
      */
     private static String scanSubnetForMachine(IGrid startGrid) {
         Set<GTRecipeType> found = new HashSet<>();
+        // 本地優先：接口自己的子網
+        if (collectStorageBusMachines(startGrid, found)) {
+            return ""; // 本地就多台 → 歧義
+        }
+        if (found.size() == 1) {
+            return found.iterator().next().registryName.toString(); // 本地唯一 → 直接用，不跨橋
+        }
+        // 本地無機器 → 沿無線橋找遠端子網（fallback）
         Set<IGrid> visited = Collections.newSetFromMap(new IdentityHashMap<>());
         Deque<IGrid> queue = new ArrayDeque<>();
         visited.add(startGrid);
-        queue.add(startGrid);
+        enqueueWirelessPeers(startGrid, visited, queue);
         int guard = 0;
         while (!queue.isEmpty() && guard++ < MAX_SCAN_GRIDS) {
             IGrid grid = queue.poll();
-            // 本 grid 的存儲總線 → 貼的機器
-            for (var machineClass : grid.getMachineClasses()) {
-                if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
+            if (collectStorageBusMachines(grid, found)) {
+                return "";
+            }
+            enqueueWirelessPeers(grid, visited, queue);
+        }
+        return found.size() == 1 ? found.iterator().next().registryName.toString() : "";
+    }
+
+    /** 掃單一 grid 的存儲總線、把貼的機器配方類型加進 found；本趟累計 >1（歧義）回 true。 */
+    private static boolean collectStorageBusMachines(IGrid grid, Set<GTRecipeType> found) {
+        for (var machineClass : grid.getMachineClasses()) {
+            if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
+                continue;
+            }
+            for (Object m : grid.getActiveMachines(machineClass)) {
+                if (!(m instanceof StorageBusPart sb)) {
                     continue;
                 }
-                for (Object m : grid.getActiveMachines(machineClass)) {
-                    if (!(m instanceof StorageBusPart sb)) {
-                        continue;
-                    }
-                    BlockEntity busHost = sb.getHost().getBlockEntity();
-                    if (busHost == null || busHost.getLevel() == null) {
-                        continue;
-                    }
-                    BlockPos target = busHost.getBlockPos().relative(sb.getSide());
-                    GTRecipeType rt = recipeTypeOf(busHost.getLevel().getBlockEntity(target));
-                    if (rt != null) {
-                        found.add(rt);
-                        if (found.size() > 1) {
-                            return ""; // 多台機器 → 歧義，不猜
-                        }
+                BlockEntity busHost = sb.getHost().getBlockEntity();
+                if (busHost == null || busHost.getLevel() == null) {
+                    continue;
+                }
+                BlockPos target = busHost.getBlockPos().relative(sb.getSide());
+                GTRecipeType rt = recipeTypeOf(busHost.getLevel().getBlockEntity(target));
+                if (rt != null) {
+                    found.add(rt);
+                    if (found.size() > 1) {
+                        return true; // 歧義
                     }
                 }
             }
-            // 本 grid 的無線連接機 → 把它橋接到的遠端子網 grid 一併排入掃描
+        }
+        return false;
+    }
+
+    /** 找 grid 上的無線連接機、把它橋接到的遠端子網（未 visited 者）排入 queue；任何失敗靜默跳過（不吞掉已找到的本地結果）。 */
+    private static void enqueueWirelessPeers(IGrid grid, Set<IGrid> visited, Deque<IGrid> queue) {
+        try {
             for (IGridNode node : grid.getNodes()) {
                 Object connector = asWirelessConnector(node.getOwner());
                 if (connector == null) {
@@ -287,8 +312,9 @@ public final class Network {
                     }
                 }
             }
+        } catch (Throwable t) {
+            // 枚舉節點／反射失敗 → 不跨橋
         }
-        return found.size() == 1 ? found.iterator().next().registryName.toString() : "";
     }
 
     /**
