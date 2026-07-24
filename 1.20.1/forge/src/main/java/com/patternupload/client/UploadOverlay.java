@@ -60,6 +60,8 @@ final class UploadOverlay {
 
     private final PatternEncodingTermScreen<?> screen;
     private final java.util.List<ListBoxReflector.Dest> destinations;
+    /** 中鍵強制開面板：面板一律視為非合成模式（見 {@link #craftMode()}），讓玩家改機器／排序／逐列上傳。 */
+    private final boolean forced;
     private final Font font;
     private final EditBox searchBox;
     private int x;
@@ -87,9 +89,10 @@ final class UploadOverlay {
     private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type,
                        String providerName, @org.jetbrains.annotations.Nullable String posKey, boolean suggested) {}
 
-    UploadOverlay(PatternEncodingTermScreen<?> screen, java.util.List<ListBoxReflector.Dest> destinations) {
+    UploadOverlay(PatternEncodingTermScreen<?> screen, java.util.List<ListBoxReflector.Dest> destinations, boolean forced) {
         this.screen = screen;
         this.destinations = destinations;
+        this.forced = forced;
         this.font = Minecraft.getInstance().font;
         this.w = clamp(orDefault(PatternUploadConfig.panelW(), DEFAULT_W), MIN_W, MAX_W);
         this.maxRows = clamp(orDefault(PatternUploadConfig.panelRows(), DEFAULT_ROWS), MIN_ROWS, MAX_ROWS_LIMIT);
@@ -166,7 +169,7 @@ final class UploadOverlay {
             // @GuiSync 的 gtocore$recipe 補回正確的類型優先。
             // 合成類樣板（craftMode）：類型與指定皆不適用，完全沿用伺服端順序
             //（gto$craftFirst 已把分子裝配室/裝配矩陣排前）。
-            boolean craft = PatternUploadClient.isCraftMode(screen.getMenu());
+            boolean craft = craftMode();
             GTRecipeType current = craft ? null : PatternUploadClient.currentRecipeType(screen.getMenu());
             // 單趟預算：每 dest 只算一次 posKey/manual/suggestion/effective/tier，
             // 避免 comparator（sortTier）每次比較與 isSuggested 各自重呼 machineFor/suggestionFor。
@@ -291,8 +294,12 @@ final class UploadOverlay {
         return heightFor(maxRows);
     }
 
+    /**
+     * 合成類樣板判定。中鍵**強制開面板**（{@code forced}）時一律視為非合成 → 面板改用一般目的地流程：
+     * 顯示機器類型、點列 icon 可指定／改機器、逐列上傳。中鍵手勢的用意本就是跳過 gto$craftFirst 自動流程、讓玩家自控。
+     */
     private boolean craftMode() {
-        return PatternUploadClient.isCraftMode(screen.getMenu());
+        return !forced && PatternUploadClient.isCraftMode(screen.getMenu());
     }
 
     private ItemStack headerIcon() {

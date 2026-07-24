@@ -521,7 +521,7 @@ public final class PatternUploadClient {
             }
         }
         // 座標／建議已在 pending 期間請求過，此時已載入 → 面板直接顯示正確機器與排序
-        overlay = new UploadOverlay(screen, dests);
+        overlay = new UploadOverlay(screen, dests, force);
         LOGGER.info("[pattern_upload] opened panel: {} entries", dests.size());
     }
 
