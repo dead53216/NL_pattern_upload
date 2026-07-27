@@ -208,7 +208,9 @@ public final class Network {
      * 解析供應器對應的機器配方類型，回 registry id 字串（無則 ""）。
      * <p>
      * 拓撲（使用者固定擺法）：主網樣板供應器 → 推送面貼 ME 接口 → 接口子網上有存儲總線 → 總線貼機器。
-     * 直接貼機器者（相鄰即 {@link MetaMachineBlockEntity}）GTOCore 已能判 → 這裡回 ""（不重複）。
+     * 直接貼機器者（相鄰即 {@link MetaMachineBlockEntity}）**也回報**其配方類型：正常情況 GTOCore 標籤已判、
+     * 客戶端不會用到，但供應器被改名（自訂名不以 {@code +} 開頭）後 GTOCore 走 AE2 原生群組
+     *（自訂名＋供應器自身 icon），機器資訊全失——此時只剩這條建議能判（客戶端以 icon 反查失敗為門檻取用）。
      * 接口子網掃到**唯一**一台有配方類型的機器才建議；0 台或多台（歧義）皆回 ""。任何例外 → ""（退舊行為）。
      * 子網若以 me無線連接機橋到遠端子網，掃描會跨橋一併涵蓋（見 {@link #scanSubnetForMachine}）。
      */
@@ -216,8 +218,12 @@ public final class Network {
                                                   java.util.IdentityHashMap<IGrid, String> gridCache) {
         try {
             BlockEntity adj = IExtendedPatternContainer.getPushBlockEntity(ippc);
-            if (adj == null || adj instanceof MetaMachineBlockEntity) {
-                return ""; // 無相鄰／直接貼機器（GTOCore 自判）
+            if (adj == null) {
+                return "";
+            }
+            if (adj instanceof MetaMachineBlockEntity) {
+                GTRecipeType rt = recipeTypeOf(adj);
+                return rt == null ? "" : rt.registryName.toString(); // 直接貼機器：即時回報（改名後唯一判定來源）
             }
             IGrid grid = gridOf(adj);
             if (grid == null) {

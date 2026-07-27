@@ -178,7 +178,7 @@ final class UploadOverlay {
             for (var dest : destinations) {
                 String posKey = PatternUploadClient.posKeyFor(dest.index());
                 GTRecipeType manual = craft ? null : PatternUploadConfig.machineFor(posKey, dest.name().getString());
-                GTRecipeType sug = craft ? null : PatternUploadClient.suggestionFor(dest.index());
+                GTRecipeType sug = craft ? null : PatternUploadClient.usableSuggestionFor(dest);
                 GTRecipeType effective = manual != null ? manual : sug; // 有效機器＝手動指定優先，無則建議
                 boolean suggested = manual == null && sug != null;       // 有效機器來自建議（非手動）→ 青色標示
                 int tier = current == null ? 0 : sortTier(dest, current, effective);
@@ -230,8 +230,8 @@ final class UploadOverlay {
      * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型；3 無法判定；4 手動指定但不吻合；5 滿槽。
      */
     static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
-        // 有效機器＝手動指定優先，無則伺服端建議；委派給帶預算值的多載（外部呼叫者用此便捷版）
-        return sortTier(d, current, PatternUploadClient.effectiveMachineFor(d.index(), d.name().getString()));
+        // 有效機器＝手動指定優先，無則「可採用」的伺服端建議；委派給帶預算值的多載（外部呼叫者用此便捷版）
+        return sortTier(d, current, PatternUploadClient.effectiveMachineFor(d));
     }
 
     /** 同 {@link #sortTier(ListBoxReflector.Dest, GTRecipeType)}，但吃已算好的有效機器（rebuildRows 單趟預算用，免重算）。 */

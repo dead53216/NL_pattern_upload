@@ -138,13 +138,28 @@ public final class PatternUploadClient {
     }
 
     /**
-     * 第 index 個目的地的「有效機器」＝手動指定（座標／名稱鍵）優先，無則用伺服端建議。
-     * 供 overlay 顯示、排序、tier 判定共用；手動指定永遠蓋過建議。
+     * 該目的地「可採用」的伺服端建議：GTOCore 標籤的 icon 已可反查機器（未改名的直接貼機器等）→ 回 null，
+     * 沿用既有 icon/名稱判定路徑（顯示與排序零變動）；icon 反查不到（接口類、或供應器**被改名**後
+     * GTOCore 退 AE2 原生群組、機器 icon 消失）才用建議補位。伺服端對直接貼機器也回報建議（見 Network），
+     * 這道門檻確保它只在標籤判不出時生效。
      */
     @Nullable
-    static GTRecipeType effectiveMachineFor(int index, String providerName) {
-        GTRecipeType manual = PatternUploadConfig.machineFor(posKeyFor(index), providerName);
-        return manual != null ? manual : suggestionFor(index);
+    static GTRecipeType usableSuggestionFor(ListBoxReflector.Dest d) {
+        GTRecipeType sug = suggestionFor(d.index());
+        if (sug == null) {
+            return null;
+        }
+        return RecipeTypeIcons.typesForIcon(d.icon()) != null ? null : sug;
+    }
+
+    /**
+     * 該目的地的「有效機器」＝手動指定（座標／名稱鍵）優先，無則用可採用的伺服端建議
+     *（{@link #usableSuggestionFor}）。供 overlay 顯示、排序、tier 判定共用；手動指定永遠蓋過建議。
+     */
+    @Nullable
+    static GTRecipeType effectiveMachineFor(ListBoxReflector.Dest d) {
+        GTRecipeType manual = PatternUploadConfig.machineFor(posKeyFor(d.index()), d.name().getString());
+        return manual != null ? manual : usableSuggestionFor(d);
     }
 
     /**
