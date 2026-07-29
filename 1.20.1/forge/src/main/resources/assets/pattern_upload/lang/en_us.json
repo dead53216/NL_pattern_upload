@@ -14,6 +14,8 @@
   "pattern_upload.free": "%s free",
   "pattern_upload.full": "Full",
   "pattern_upload.full.tooltip": "This destination has no free pattern slots",
+  "pattern_upload.has_recipe": "Has this recipe",
+  "pattern_upload.has_recipe.tooltip": "This destination already has a pattern with the same output (upload would be ignored)",
   "pattern_upload.no_blank": "No blank pattern in the network, nothing sent",
   "pattern_upload.no_machine": "Unknown machine",
   "pattern_upload.search": "Search…",

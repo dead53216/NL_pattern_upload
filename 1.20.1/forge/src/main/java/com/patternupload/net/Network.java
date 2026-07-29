@@ -10,6 +10,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.api.distmarker.Dist;
@@ -32,11 +33,13 @@ import com.gregtechceu.gtceu.api.machine.feature.IRecipeLogicMachine;
 import com.gregtechceu.gtceu.api.machine.feature.multiblock.IMultiPart;
 import com.gregtechceu.gtceu.api.recipe.GTRecipeType;
 
+import appeng.api.crafting.PatternDetailsHelper;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridNode;
 import appeng.api.networking.IManagedGridNode;
 import appeng.api.networking.IInWorldGridNodeHost;
 import appeng.api.networking.security.IActionHost;
+import appeng.api.stacks.AEKey;
 import appeng.me.helpers.IGridConnectedBlockEntity;
 import appeng.menu.me.items.PatternEncodingTermMenu;
 import appeng.parts.storagebus.StorageBusPart;
@@ -81,6 +84,8 @@ public final class Network {
 
     private static Field containersField;
     private static boolean reflectBroken = false;
+    private static Field patternStackField;
+    private static boolean patternStackBroken = false;
 
     /** 跨無線連接機 BFS 掃描的 grid 上限（防環／防爆走；正常子網拓撲遠低於此）。 */
     private static final int MAX_SCAN_GRIDS = 64;
@@ -118,13 +123,15 @@ public final class Network {
      * S2C：照 index 對齊的座標與建議機器。第 i 筆：
      * {@code dims[i]==null} 表無座標（該容器非方塊型），否則 {@code GlobalPos(dims[i], BlockPos.of(packed[i]))}；
      * {@code suggest[i]} 為建議機器的配方類型 registry id 字串（空字串＝無建議／歧義／已可直判）；
-     * {@code free[i]} 為該供應器樣板槽剩餘空格數（-1＝未知）。
+     * {@code free[i]} 為該供應器樣板槽剩餘空格數（-1＝未知）；
+     * {@code hasRecipe[i]} 為該供應器已有「與本次編碼相同主產物」的樣板（GTO 上傳去重的同款判定）。
      * <p>
-     * {@code free} 是 1.15.0 加的**尾綴欄位**（協定號不變）：encode 寫在原有欄位之後，decode 以
-     * {@code isReadable()} 偵測——舊伺服端沒寫 → 全 -1；舊客戶端不讀 → 剩餘 bytes 被丟棄無害。
-     * 兩側版本不齊皆退「無剩餘格資訊」，不斷線、不炸包。
+     * {@code free}（1.15.0）與 {@code hasRecipe}（1.16.0）是**尾綴欄位**（協定號不變）：encode 依序寫在
+     * 原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——舊伺服端沒寫 → 該段取預設（-1／false）；
+     * 舊客戶端不讀 → 剩餘 bytes 被丟棄無害。兩側版本不齊皆退預設值，不斷線、不炸包。
      */
-    public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest, int[] free) {
+    public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest, int[] free,
+                           boolean[] hasRecipe) {
         static void encode(ReplyS2C m, FriendlyByteBuf b) {
             b.writeVarInt(m.gen);
             b.writeVarInt(m.packed.length);
@@ -140,6 +147,9 @@ public final class Network {
             }
             for (int i = 0; i < m.packed.length; i++) {
                 b.writeVarInt(m.free[i] + 1); // 偏移 1：-1（未知）也走單 byte varint
+            }
+            for (int i = 0; i < m.packed.length; i++) {
+                b.writeBoolean(m.hasRecipe[i]);
             }
         }
 
@@ -164,7 +174,13 @@ public final class Network {
             } else {
                 java.util.Arrays.fill(free, -1); // 舊伺服端：無尾綴
             }
-            return new ReplyS2C(gen, packed, dims, suggest, free);
+            boolean[] hasRecipe = new boolean[n]; // 預設 false
+            if (b.isReadable()) {
+                for (int i = 0; i < n; i++) {
+                    hasRecipe[i] = b.readBoolean();
+                }
+            }
+            return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe);
         }
     }
 
@@ -193,6 +209,9 @@ public final class Network {
             ResourceLocation[] dims = new ResourceLocation[n];
             String[] suggest = new String[n];
             int[] free = new int[n];
+            boolean[] hasRecipe = new boolean[n];
+            // 本次編碼樣板的主產物（GTO 上傳去重同款判定：mixin 暫存 gto$patternStack → decode → primaryOutput）
+            AEKey primaryOut = primaryOutputOfEncoding(menu, player.level());
             // request 範圍內以子網 grid 為鍵快取建議機器：多個供應器橋接同一子網時只掃一次
             //（grid 拓撲在單一同步 runnable 內不變 → 恆等）
             java.util.IdentityHashMap<IGrid, String> gridCache = new java.util.IdentityHashMap<>();
@@ -209,9 +228,11 @@ public final class Network {
                     }
                     suggest[i] = resolveSuggestedMachine(ippc, gridCache);
                     free[i] = countFreePatternSlots(ippc);
+                    hasRecipe[i] = primaryOut != null && containsPrimaryOutput(ippc, primaryOut, player.level());
                 }
             }
-            CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new ReplyS2C(msg.gen(), packed, dims, suggest, free));
+            CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
+                    new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe));
         });
         ctx.setPacketHandled(true);
     }
@@ -221,6 +242,87 @@ public final class Network {
         ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
                 () -> () -> com.patternupload.client.PatternUploadClient.receiveDestPositions(msg)));
         ctx.setPacketHandled(true);
+    }
+
+    /**
+     * 本次編碼樣板的主產物 AEKey；取不到（沒編碼／反射失敗／解不開）回 null（hasRecipe 全 false）。
+     * 樣板本體來自 GTOCore mixin 暫存欄位 {@code gto$patternStack}（編碼請求時寫入，與
+     * {@code gto$currentContainers} 同批），解碼走 AE2 公開 API {@link PatternDetailsHelper#decodePattern}。
+     */
+    @Nullable
+    private static AEKey primaryOutputOfEncoding(AbstractContainerMenu menu, Level level) {
+        try {
+            ItemStack pattern = readPatternStack(menu);
+            if (pattern == null || pattern.isEmpty()) {
+                return null;
+            }
+            var details = PatternDetailsHelper.decodePattern(pattern, level);
+            if (details == null || details.getPrimaryOutput() == null) {
+                return null;
+            }
+            return details.getPrimaryOutput().what();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * 供應器是否已有「主產物相同」的樣板——與 GTOCore 上傳去重（{@code gto$containsPrimaryOutput}）同款判定：
+     * 逐張 decode 供應器樣板庫存、比主產物 AEKey。**不比 NBT**：GTOCore encode hook 會塞殘留 {@code recipe}
+     * 標籤，NBT 等值不可靠；主產物比對即 GTO 實際的忽略依據。
+     */
+    private static boolean containsPrimaryOutput(IExtendedPatternContainer.IPPPC ippc, AEKey key, Level level) {
+        try {
+            var inv = ippc.getTerminalPatternInventory();
+            if (inv == null) {
+                return false;
+            }
+            for (ItemStack st : inv) {
+                if (st.isEmpty()) {
+                    continue;
+                }
+                var details = PatternDetailsHelper.decodePattern(st, level);
+                if (details != null && details.getPrimaryOutput() != null
+                        && key.equals(details.getPrimaryOutput().what())) {
+                    return true;
+                }
+            }
+        } catch (Throwable t) {
+            // 解碼失敗 → 當沒有（退舊行為）
+        }
+        return false;
+    }
+
+    /** 反射 GTOCore mixin 欄位 {@code gto$patternStack}（GTO 自有欄位名不經 SRG remap，同 gto$currentContainers）。 */
+    @Nullable
+    private static ItemStack readPatternStack(AbstractContainerMenu menu) {
+        if (patternStackBroken) {
+            return null;
+        }
+        try {
+            if (patternStackField == null) {
+                Field f = null;
+                Class<?> cls = menu.getClass();
+                while (cls != null && f == null) {
+                    try {
+                        f = cls.getDeclaredField("gto$patternStack");
+                    } catch (NoSuchFieldException e) {
+                        cls = cls.getSuperclass();
+                    }
+                }
+                if (f == null) {
+                    patternStackBroken = true;
+                    LOGGER.warn("[pattern_upload] 找不到 gto$patternStack 欄位，「已有該配方」判定停用");
+                    return null;
+                }
+                f.setAccessible(true);
+                patternStackField = f;
+            }
+            return patternStackField.get(menu) instanceof ItemStack st ? st : null;
+        } catch (Throwable t) {
+            patternStackBroken = true;
+            return null;
+        }
     }
 
     /**

@@ -87,7 +87,14 @@ final class UploadOverlay {
     private final Set<Integer> selected = new HashSet<>();
 
     private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type,
-                       String providerName, @org.jetbrains.annotations.Nullable String posKey, boolean suggested) {}
+                       String providerName, @org.jetbrains.annotations.Nullable String posKey, boolean suggested,
+                       boolean hasRecipe) {
+
+        /** 不可上傳（視同滿槽的行為門檻）：真滿槽，或已有本次編碼的樣板（上傳會被 GTO 忽略）。 */
+        boolean blocked() {
+            return full || hasRecipe;
+        }
+    }
 
     UploadOverlay(PatternEncodingTermScreen<?> screen, java.util.List<ListBoxReflector.Dest> destinations, boolean forced) {
         this.screen = screen;
@@ -202,24 +209,27 @@ final class UploadOverlay {
                 if (!PinyinMatch.matches(filterText, filter)) {
                     continue;
                 }
+                boolean hasRecipe = PatternUploadClient.hasRecipeFor(dest.index());
                 if (assigned != null) {
                     rows.add(new Row(RecipeTypeIcons.icon(assigned), null, display, dest.full(), dest.index(), assigned,
-                            providerName, p.posKey(), p.suggested()));
+                            providerName, p.posKey(), p.suggested(), hasRecipe));
                 } else {
-                    rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName, p.posKey(), false));
+                    rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName,
+                            p.posKey(), false, hasRecipe));
                 }
             }
         } else {
             if (filter.isEmpty() && PatternUploadConfig.machineFor(selectingPosKey, selectingName) != null) {
                 rows.add(new Row(RecipeTypeIcons.patternIcon(), null,
-                        Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null, "", null, false));
+                        Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null, "", null, false,
+                        false));
             }
             for (GTRecipeType type : RecipeTypeIcons.allTypes()) {
                 Component name = RecipeTypeIcons.name(type);
                 if (!PinyinMatch.matches(name.getString(), filter)) {
                     continue;
                 }
-                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, "", null, false));
+                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, "", null, false, false));
             }
         }
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - maxRows));
@@ -227,7 +237,8 @@ final class UploadOverlay {
 
     /**
      * 目的地排序層級（越小越前），0/1 視為「明確匹配」可自動上傳：
-     * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型；3 無法判定；4 手動指定但不吻合；5 滿槽。
+     * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型；3 無法判定；4 手動指定但不吻合；
+     * 5 滿槽／已有該配方（後者上傳會被 GTO 忽略，視同滿槽——也因此不算進自動直傳的明確匹配）。
      */
     static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
         // 有效機器＝手動指定優先，無則「可採用」的伺服端建議；委派給帶預算值的多載（外部呼叫者用此便捷版）
@@ -236,7 +247,7 @@ final class UploadOverlay {
 
     /** 同 {@link #sortTier(ListBoxReflector.Dest, GTRecipeType)}，但吃已算好的有效機器（rebuildRows 單趟預算用，免重算）。 */
     static int sortTier(ListBoxReflector.Dest d, GTRecipeType current, @org.jetbrains.annotations.Nullable GTRecipeType effective) {
-        if (d.full()) {
+        if (d.full() || PatternUploadClient.hasRecipeFor(d.index())) {
             return 5;
         }
         if (effective != null) {
@@ -363,7 +374,7 @@ final class UploadOverlay {
             int ry = top + i * ROW_H;
             boolean hover = mouseX >= x + 2 && mouseX < x + w - 2 && mouseY >= ry && mouseY < ry + ROW_H;
             boolean iconHover = mode == Mode.DESTINATIONS && !craftMode() && isOverRowIcon(mouseX, mouseY, ry);
-            if (hover && !(mode == Mode.DESTINATIONS && row.full() && !iconHover)) {
+            if (hover && !(mode == Mode.DESTINATIONS && row.blocked() && !iconHover)) {
                 g.fill(x + 2, ry, x + w - 2, ry + ROW_H, 0x40FFFFFF);
             }
             if (iconHover) {
@@ -379,17 +390,28 @@ final class UploadOverlay {
             } else {
                 g.renderItem(row.icon(), x + 3, ry);
             }
-            int color = (mode == Mode.DESTINATIONS && row.full()) ? 0x777777 : 0xE0E0E0;
+            int color = (mode == Mode.DESTINATIONS && row.blocked()) ? 0x777777 : 0xE0E0E0;
             String fullTag = (mode == Mode.DESTINATIONS && row.full())
                     ? " [" + Component.translatable("pattern_upload.full").getString() + "]" : "";
-            // 樣板槽剩餘空格（伺服端隨座標封包回報；-1＝未知不畫）：右緣置中，名稱寬度讓位避免重疊
+            // 右緣註記（右緣置中，名稱寬度讓位避免重疊）：已有該配方（橙）優先，否則樣板槽剩餘空格
+            //（伺服端隨座標封包回報；-1＝未知不畫）
             int freeW = 0;
             if (mode == Mode.DESTINATIONS) {
-                int freeN = PatternUploadClient.freeSlotsFor(row.destIndex());
-                if (freeN >= 0) {
-                    String freeStr = Component.translatable("pattern_upload.free", freeN).getString();
-                    int fw = font.width(freeStr);
-                    g.drawString(font, freeStr, x + w - 5 - fw, ry + 5, row.full() ? 0x996666 : 0x77BB77);
+                String tail = null;
+                int tailColor = 0;
+                if (row.hasRecipe()) {
+                    tail = Component.translatable("pattern_upload.has_recipe").getString();
+                    tailColor = 0xCC9944;
+                } else {
+                    int freeN = PatternUploadClient.freeSlotsFor(row.destIndex());
+                    if (freeN >= 0) {
+                        tail = Component.translatable("pattern_upload.free", freeN).getString();
+                        tailColor = row.full() ? 0x996666 : 0x77BB77;
+                    }
+                }
+                if (tail != null) {
+                    int fw = font.width(tail);
+                    g.drawString(font, tail, x + w - 5 - fw, ry + 5, tailColor);
                     freeW = fw + 4;
                 }
             }
@@ -399,7 +421,7 @@ final class UploadOverlay {
                 // 機器名顏色：手動指定＝白；伺服端建議（接口→存儲總線自動解析）＝青色標示，可分辨並提醒可手動覆寫。
                 String[] pf = splitFactoryName(row.providerName());
                 String label = pf != null ? pf[1] : row.providerName();
-                int nameColor = row.full() ? 0x777777 : (row.suggested() ? 0x66CCFF : color);
+                int nameColor = row.blocked() ? 0x777777 : (row.suggested() ? 0x66CCFF : color);
                 g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, nameW), x + 21, ry + 1, nameColor);
                 g.drawString(font, font.plainSubstrByWidth("(" + label + ")", nameW), x + 21, ry + 9, 0x999999);
             } else {
@@ -445,6 +467,8 @@ final class UploadOverlay {
                 int ry = top + (idx - scrollOff) * ROW_H;
                 if (!craftMode() && isOverRowIcon(mouseX, mouseY, ry)) {
                     g.renderTooltip(font, Component.translatable("pattern_upload.assign.tooltip"), mouseX, mouseY);
+                } else if (rows.get(idx).hasRecipe()) {
+                    g.renderTooltip(font, Component.translatable("pattern_upload.has_recipe.tooltip"), mouseX, mouseY);
                 } else if (rows.get(idx).full()) {
                     g.renderTooltip(font, Component.translatable("pattern_upload.full.tooltip"), mouseX, mouseY);
                 }
@@ -537,7 +561,7 @@ final class UploadOverlay {
             int mi = rowIndexAt(mx, my);
             if (mi >= 0) {
                 Row row = rows.get(mi);
-                if (!row.full() && !selected.remove(row.destIndex())) {
+                if (!row.blocked() && !selected.remove(row.destIndex())) {
                     selected.add(row.destIndex());
                 }
             }
@@ -581,7 +605,7 @@ final class UploadOverlay {
                 } else if (!selected.isEmpty()) {
                     // 有多選 → 左鍵批次上傳全部已選（不論點在哪列）
                     batchUpload();
-                } else if (!row.full()) {
+                } else if (!row.blocked()) {
                     var player = Minecraft.getInstance().player;
                     if (PatternUploadClient.blankPatternCount(screen.getMenu()) == 0) {
                         // 網路沒空白樣板 → 不上傳、不謊報成功；面板留著讓玩家補樣板後重試
@@ -622,7 +646,7 @@ final class UploadOverlay {
         // 需要的張數 = 已選且非滿槽的目的地數（每張目的地各扣一張空白樣板）
         int needed = 0;
         for (var d : destinations) {
-            if (!d.full() && selected.contains(d.index())) {
+            if (!d.full() && !PatternUploadClient.hasRecipeFor(d.index()) && selected.contains(d.index())) {
                 needed++;
             }
         }
@@ -640,7 +664,7 @@ final class UploadOverlay {
         }
         int count = 0;
         for (var d : destinations) {
-            if (d.full() || !selected.contains(d.index())) {
+            if (d.full() || PatternUploadClient.hasRecipeFor(d.index()) || !selected.contains(d.index())) {
                 continue;
             }
             menu.gtolib$sendPattern(d.index());

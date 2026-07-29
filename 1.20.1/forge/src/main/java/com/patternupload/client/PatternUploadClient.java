@@ -59,6 +59,9 @@ public final class PatternUploadClient {
     /** 各目的地樣板槽剩餘空格數（照 index 對齊；-1＝未知——舊伺服端／取不到）。 */
     @Nullable
     private static int[] posFree = null;
+    /** 各目的地是否已有「與本次編碼相同主產物」的樣板（GTO 上傳去重同款判定；照 index 對齊）。 */
+    @Nullable
+    private static boolean[] posHasRecipe = null;
 
     /**
      * 延遲決策：處理樣板的「自動直傳 vs 開面板」決策延到伺服端座標／建議回來再判。
@@ -92,6 +95,7 @@ public final class PatternUploadClient {
         posPacked = null;
         posSuggest = null;
         posFree = null;
+        posHasRecipe = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -109,6 +113,7 @@ public final class PatternUploadClient {
         posPacked = msg.packed();
         posSuggest = msg.suggest();
         posFree = msg.free();
+        posHasRecipe = msg.hasRecipe();
         LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
         if (pendingDests != null) {
             decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板
@@ -146,6 +151,12 @@ public final class PatternUploadClient {
     static int freeSlotsFor(int index) {
         int[] f = posFree;
         return (f == null || index < 0 || index >= f.length) ? -1 : f[index];
+    }
+
+    /** 第 index 個目的地是否已有本次編碼樣板（主產物相同）；未知（舊伺服端／沒回）回 false。 */
+    static boolean hasRecipeFor(int index) {
+        boolean[] h = posHasRecipe;
+        return h != null && index >= 0 && index < h.length && h[index];
     }
 
     /**
@@ -650,6 +661,7 @@ public final class PatternUploadClient {
             posPacked = null;
             posSuggest = null;
             posFree = null;
+            posHasRecipe = null;
             // 清 currentRecipeType 快取（不長抓已關終端的 menu 參照）
             crtMenu = null;
             crtKey = null;

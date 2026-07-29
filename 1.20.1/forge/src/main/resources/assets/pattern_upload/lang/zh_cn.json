@@ -14,6 +14,8 @@
   "pattern_upload.free": "余 %s 格",
   "pattern_upload.full": "满",
   "pattern_upload.full.tooltip": "该目的地样板槽已满",
+  "pattern_upload.has_recipe": "已有该配方",
+  "pattern_upload.has_recipe.tooltip": "该目的地已有相同产物的样板（上传会被忽略）",
   "pattern_upload.no_blank": "网络中没有空白样板，未上传",
   "pattern_upload.no_machine": "未知机器",
   "pattern_upload.search": "搜索…",
