@@ -59,6 +59,16 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
     幾乎必然多機型歧義回 ""（本地明明有機器卻判不出，1.12.0 曾如此回歸）；本地優先保證本地能判者照舊、跨橋只當補救。
     `WirelessNetworkSavedData.networkPool` 型別是 gtocore JiJ 內嵌的 fastcollection、不在編譯 classpath → **該一跳走反射**
     （GTO 自有類名不經 SRG remap，穩定）；枚舉節點／反射任何失敗靜默跳過（不吞本地結果）。唯一機型才建議，跨橋後多機型仍歧義回 ""。
+  - **貼「超立方體發生器」追綁定目標（1.14.0）**：GTOCore tesseract（基礎／進階／定向）是**代理機器**——
+    綁定卡放機器內部、物品/流體操作轉發到被綁方塊，供應器可貼它傳輸。三者都 `extends MetaMachine` 但
+    **無配方邏輯**（註冊鏈沒設 recipeType → `getRecipeTypes()` = null）→ GTOCore 標籤顯示 tesseract 自身
+    icon/名稱、客戶端 icon 反查與名稱匹配（表裡只收有配方類型的機器）雙雙落空 → 修前必判「未知」。
+    現伺服端 `resolveSuggestedMachine` 對直貼機器判不出配方時追 tesseract 綁定：進階／定向走 `IMultiTesseract`
+    迭代 `getBlockEntity(i)`（定向版 `TesseractDirectedTarget` 為 GlobalPos，跨維度亦涵蓋）、基礎版讀公開欄位
+    `pos`；**唯一**機型才建議（綁多台同型＝常見擺法，照判），多機型歧義回 ""。gtocore 在編譯 classpath，
+    直接 import 免反射（`IMultiTesseract` 型別階層只含 gtceu/gtocore 自有類，無 JiJ 缺類 instanceof 雷）。
+    tesseract icon 反查必為 null → `usableSuggestionFor` 門檻自動放行，顯示／排序／自動直傳全走 1.13.1 建議路。
+    綁到另一台 tesseract 不遞迴（當非機器跳過）；目標 chunk 未載入該格跳過。
   客戶端**有效機器＝手動指定 ?? 伺服端建議**：不用手點就顯示對的機器、吻合者浮頂；建議**不落盤**
   （每次伺服端即時重算，永遠正確），手動指定仍可覆寫。建議列機器名以**青色**標示、與手動指定（白）區分。
 - **自動直傳決策延到座標／建議到齊再判**（`decidePending`）：劫持清單後不立即決策，先向伺服端要座標＋建議，
@@ -154,3 +164,5 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   1.12.1 修）。GTO 無線 API 走反射、失敗自動退回不跨橋。
 - 供應器改名後的機器判定靠伺服端建議（1.13.1）：**伺服端沒裝本 mod** → 收不到建議，改名（不以 `+` 開頭）的
   直貼機器供應器仍會變「未知」——此時請用 GTO 的 `+後綴` 改名慣例，或手動指定機器（名稱鍵）。
+- 貼超立方體發生器的供應器同理全靠伺服端建議（1.14.0）：**伺服端沒裝本 mod** → 必「未知」，只能手動指定。
+  綁定目標多機型（如一台 tesseract 同時綁液化機＋壓印器）→ 歧義不建議；綁鏈式 tesseract 不追第二層。

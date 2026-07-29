@@ -22,6 +22,8 @@ import net.minecraftforge.network.simple.SimpleChannel;
 
 import com.gtocore.integration.ae.hooks.IExtendedPatternContainer;
 import com.gtocore.integration.ae.wireless.WirelessMachine;
+import com.gtocore.common.machine.tesseract.IMultiTesseract;
+import com.gtocore.common.machine.tesseract.TesseractMachine;
 import com.gtocore.common.saved.WirelessNetworkSavedData;
 
 import com.gregtechceu.gtceu.api.blockentity.MetaMachineBlockEntity;
@@ -213,6 +215,7 @@ public final class Network {
      *（自訂名＋供應器自身 icon），機器資訊全失——此時只剩這條建議能判（客戶端以 icon 反查失敗為門檻取用）。
      * 接口子網掃到**唯一**一台有配方類型的機器才建議；0 台或多台（歧義）皆回 ""。任何例外 → ""（退舊行為）。
      * 子網若以 me無線連接機橋到遠端子網，掃描會跨橋一併涵蓋（見 {@link #scanSubnetForMachine}）。
+     * 貼「超立方體發生器」（無配方邏輯的代理機器）→ 追其綁定目標判定（見 {@link #tesseractRecipeType}）。
      */
     private static String resolveSuggestedMachine(IExtendedPatternContainer.IPPPC ippc,
                                                   java.util.IdentityHashMap<IGrid, String> gridCache) {
@@ -221,8 +224,11 @@ public final class Network {
             if (adj == null) {
                 return "";
             }
-            if (adj instanceof MetaMachineBlockEntity) {
+            if (adj instanceof MetaMachineBlockEntity mmbe) {
                 GTRecipeType rt = recipeTypeOf(adj);
+                if (rt == null) {
+                    rt = tesseractRecipeType(mmbe.getMetaMachine()); // 超立方體發生器：追綁定目標
+                }
                 return rt == null ? "" : rt.registryName.toString(); // 直接貼機器：即時回報（改名後唯一判定來源）
             }
             IGrid grid = gridOf(adj);
@@ -434,6 +440,39 @@ public final class Network {
             if (node != null) {
                 return node.getGrid();
             }
+        }
+        return null;
+    }
+
+    /**
+     * 供應器貼「超立方體發生器」（GTOCore 代理方塊：綁定卡放機器內部、物品/流體操作轉發到被綁方塊）時，
+     * 追其綁定目標解析配方類型。tesseract 本身無配方邏輯（recipeTypes = null）→ GTOCore 標籤顯示 tesseract
+     * 自身 icon、客戶端 icon 反查必落空 → 這裡的建議是唯一判定來源（{@code usableSuggestionFor} 門檻自動放行）。
+     * <ul>
+     *   <li>進階／定向（{@link IMultiTesseract}）：迭代 {@code getBlockEntity(i)}（定向版 GlobalPos 跨維度亦涵蓋）。</li>
+     *   <li>基礎版（{@link TesseractMachine}）：單一公開欄位 {@code pos}。</li>
+     * </ul>
+     * **唯一**機型才回（綁多台同型機器＝常見擺法，照判）；多機型歧義／全非機器 → null。
+     * 綁定目標又是 tesseract → 不遞迴（recipeTypeOf 判 null 跳過）；目標 chunk 未載入 → 該格 null 跳過。
+     */
+    @Nullable
+    private static GTRecipeType tesseractRecipeType(MetaMachine mm) {
+        if (mm instanceof IMultiTesseract multi) {
+            Set<GTRecipeType> found = new HashSet<>();
+            int total = multi.getTotalBlockEntities();
+            for (int i = 0; i < total; i++) {
+                GTRecipeType rt = recipeTypeOf(multi.getBlockEntity(i));
+                if (rt != null) {
+                    found.add(rt);
+                    if (found.size() > 1) {
+                        return null; // 多機型歧義
+                    }
+                }
+            }
+            return found.size() == 1 ? found.iterator().next() : null;
+        }
+        if (mm instanceof TesseractMachine tm && tm.pos != null && tm.getLevel() != null) {
+            return recipeTypeOf(tm.getLevel().getBlockEntity(tm.pos));
         }
         return null;
     }
