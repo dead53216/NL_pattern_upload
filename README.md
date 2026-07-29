@@ -23,8 +23,16 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   以**同款判定**（mixin 暫存 `gto$patternStack` 反射取本次編碼樣板 → AE2 公開 API
   `PatternDetailsHelper.decodePattern` 解主產物 → 逐張 decode 供應器樣板庫存比主產物 AEKey；**不比 NBT**，
   GTOCore encode hook 塞的殘留 `recipe` 標籤使 NBT 等值不可靠）預先標記，`hasRecipe[]` 再走一段尾綴欄位。
-  客戶端該列**行為視同滿槽**：灰字、不可點、不可多選、批次跳過、排 tier 5、不算進自動直傳明確匹配；
+  客戶端該列**行為視同滿槽**：灰字、不可點、不可多選、批次跳過、不算進自動直傳明確匹配；
   右緣改顯**橙字「已有該配方」**（取代剩餘格數）＋tooltip 說明。舊伺服端沒回 → 全 false 照舊。
+- **被 GTO 藏掉的「已有」供應器補回＋置頂（1.17.0）**：GTO 建清單時把「已有該配方」的供應器**整列移除**
+  （removeIf `canAddPattern && containsPrimaryOutput`）→ 客戶端清單根本沒有、1.16.0 的標記無從顯示。
+  現伺服端照 GTO 同款枚舉（`getMachineClasses` → `IExtendedPatternContainer` → `getActiveMachines`）
+  找整網「不在清單、終端可見、已有本次主產物」者，以 `ReplyS2C` **第三段尾綴** `extras`（GTOCore 群組
+  標籤名＋群組 icon 物品 id＋建議機器＋剩餘格，上限 16）回報。客戶端把它們與清單內 hasRecipe 列一起
+  **置頂**（tier -1）：玩家一眼看到「這張樣板已經在哪」。額外列純資訊（不可點、不可指定機器、icon 用
+  建議機器 icon 或群組 icon）。**extras 非空時押制單一匹配自動直傳**（改開面板）——網路已有這張樣板還
+  無感直傳到別台＝重複鋪樣板。伺服端沒裝本 mod → 無 extras、無押制（照舊）。
 - **右鍵多選、左鍵批次上傳**：DESTINATIONS 模式**右鍵**點列 → 綠框高亮切換加入/移除多選（滿槽列不選）；**左鍵**上傳時：**有多選** → 對所有已選目的地各送一次樣板（不論點在哪列）；**無多選** → 照舊只傳點擊列。
   批次以 `destinations`（伺服端順序）迭代逐一 `gtolib$sendPattern`，涵蓋被搜尋過濾掉的已選列並跳過滿槽；每次伺服端自 ME 網路抽一張空白樣板寫入（樣板由伺服端自扣，不需客戶端動封包）。
   面板左下顯示已選數量提示，聊天欄回報批次上傳目的地數。右鍵在面板內一律吃掉避免誤觸終端。

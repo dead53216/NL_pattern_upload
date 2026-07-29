@@ -90,6 +90,9 @@ public final class Network {
     /** 跨無線連接機 BFS 掃描的 grid 上限（防環／防爆走；正常子網拓撲遠低於此）。 */
     private static final int MAX_SCAN_GRIDS = 64;
 
+    /** 「已有該配方而被 GTO 藏掉」的額外列回報上限（防爆包；正常情境 1～2 列）。 */
+    private static final int MAX_EXTRAS = 16;
+
     private Network() {}
 
     public static void init() {
@@ -126,12 +129,20 @@ public final class Network {
      * {@code free[i]} 為該供應器樣板槽剩餘空格數（-1＝未知）；
      * {@code hasRecipe[i]} 為該供應器已有「與本次編碼相同主產物」的樣板（GTO 上傳去重的同款判定）。
      * <p>
-     * {@code free}（1.15.0）與 {@code hasRecipe}（1.16.0）是**尾綴欄位**（協定號不變）：encode 依序寫在
-     * 原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——舊伺服端沒寫 → 該段取預設（-1／false）；
-     * 舊客戶端不讀 → 剩餘 bytes 被丟棄無害。兩側版本不齊皆退預設值，不斷線、不炸包。
+     * {@code extras} 為「已有該配方但被 GTO 從清單移除」的供應器（GTO 建清單時 removeIf
+     * {@code canAddPattern && containsPrimaryOutput}——客戶端清單根本沒有這些列），伺服端照 GTO 同款
+     * 枚舉整網補回，客戶端置頂展示（純資訊列、不可上傳）。
+     * <p>
+     * {@code free}（1.15.0）、{@code hasRecipe}（1.16.0）、{@code extras}（1.17.0）是**尾綴欄位**
+     *（協定號不變）：encode 依序寫在原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——舊伺服端
+     * 沒寫 → 該段取預設（-1／false／空表）；舊客戶端不讀 → 剩餘 bytes 被丟棄無害。
+     * 兩側版本不齊皆退預設值，不斷線、不炸包。
      */
     public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest, int[] free,
-                           boolean[] hasRecipe) {
+                           boolean[] hasRecipe, List<Extra> extras) {
+
+        /** 被 GTO 藏掉的「已有該配方」供應器：GTOCore 群組標籤名、群組 icon 物品 id、建議機器、剩餘格。 */
+        public record Extra(String name, String iconId, String suggest, int free) {}
         static void encode(ReplyS2C m, FriendlyByteBuf b) {
             b.writeVarInt(m.gen);
             b.writeVarInt(m.packed.length);
@@ -150,6 +161,13 @@ public final class Network {
             }
             for (int i = 0; i < m.packed.length; i++) {
                 b.writeBoolean(m.hasRecipe[i]);
+            }
+            b.writeVarInt(m.extras.size());
+            for (Extra e : m.extras) {
+                b.writeUtf(e.name());
+                b.writeUtf(e.iconId());
+                b.writeUtf(e.suggest());
+                b.writeVarInt(e.free() + 1);
             }
         }
 
@@ -180,7 +198,14 @@ public final class Network {
                     hasRecipe[i] = b.readBoolean();
                 }
             }
-            return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe);
+            List<Extra> extras = new ArrayList<>(); // 預設空
+            if (b.isReadable()) {
+                int en = b.readVarInt();
+                for (int i = 0; i < en; i++) {
+                    extras.add(new Extra(b.readUtf(), b.readUtf(), b.readUtf(), b.readVarInt() - 1));
+                }
+            }
+            return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe, extras);
         }
     }
 
@@ -231,8 +256,13 @@ public final class Network {
                     hasRecipe[i] = primaryOut != null && containsPrimaryOutput(ippc, primaryOut, player.level());
                 }
             }
+            // GTO 建清單時把「已有該配方」的供應器整列移除（removeIf canAddPattern && containsPrimaryOutput）
+            // → 客戶端清單沒有它們。這裡照 GTO 同款枚舉整網補回，客戶端置頂當資訊列。
+            List<ReplyS2C.Extra> extras = primaryOut == null
+                    ? List.of()
+                    : findHiddenHasRecipe((PatternEncodingTermMenu) menu, containers, primaryOut, player.level(), gridCache);
             CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
-                    new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe));
+                    new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe, extras));
         });
         ctx.setPacketHandled(true);
     }
@@ -267,11 +297,65 @@ public final class Network {
     }
 
     /**
+     * 照 GTO 同款枚舉（grid.getMachineClasses → isAssignableFrom IExtendedPatternContainer →
+     * getActiveMachines）找整網供應器，取「不在目前清單（被 GTO removeIf 藏掉）、終端可見、
+     * 已有本次主產物」者當額外資訊列。任何失敗回已收集部分（或空表）。上限 {@link #MAX_EXTRAS}。
+     */
+    private static List<ReplyS2C.Extra> findHiddenHasRecipe(PatternEncodingTermMenu menu, List<?> current,
+                                                            AEKey primaryOut, Level level,
+                                                            java.util.IdentityHashMap<IGrid, String> gridCache) {
+        List<ReplyS2C.Extra> out = new ArrayList<>();
+        try {
+            IGridNode node = menu.getNetworkNode();
+            IGrid grid = node == null ? null : node.getGrid();
+            if (grid == null) {
+                return out;
+            }
+            Set<Object> known = Collections.newSetFromMap(new IdentityHashMap<>());
+            known.addAll(current);
+            outer:
+            for (var cls : grid.getMachineClasses()) {
+                if (!IExtendedPatternContainer.class.isAssignableFrom(cls)) {
+                    continue;
+                }
+                for (Object m : grid.getActiveMachines(cls)) {
+                    if (known.contains(m) || !(m instanceof IExtendedPatternContainer c)
+                            || !c.isVisibleInTerminal() || !containsPrimaryOutput(c, primaryOut, level)) {
+                        continue;
+                    }
+                    String name = "";
+                    String iconId = "";
+                    try {
+                        var group = c.getTerminalGroup();
+                        if (group != null) {
+                            name = group.name() == null ? "" : group.name().getString();
+                            iconId = group.icon() == null ? ""
+                                    : net.minecraft.core.registries.BuiltInRegistries.ITEM
+                                            .getKey(group.icon().getItem()).toString();
+                        }
+                    } catch (Throwable ignored) {
+                        // 標籤取不到 → 空字串（客戶端退樣板 icon／空名）
+                    }
+                    String sug = c instanceof IExtendedPatternContainer.IPPPC ippc
+                            ? resolveSuggestedMachine(ippc, gridCache) : "";
+                    out.add(new ReplyS2C.Extra(name, iconId, sug, countFreePatternSlots(c)));
+                    if (out.size() >= MAX_EXTRAS) {
+                        break outer;
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            // 枚舉失敗 → 回已收集部分
+        }
+        return out;
+    }
+
+    /**
      * 供應器是否已有「主產物相同」的樣板——與 GTOCore 上傳去重（{@code gto$containsPrimaryOutput}）同款判定：
      * 逐張 decode 供應器樣板庫存、比主產物 AEKey。**不比 NBT**：GTOCore encode hook 會塞殘留 {@code recipe}
      * 標籤，NBT 等值不可靠；主產物比對即 GTO 實際的忽略依據。
      */
-    private static boolean containsPrimaryOutput(IExtendedPatternContainer.IPPPC ippc, AEKey key, Level level) {
+    private static boolean containsPrimaryOutput(IExtendedPatternContainer ippc, AEKey key, Level level) {
         try {
             var inv = ippc.getTerminalPatternInventory();
             if (inv == null) {
@@ -331,7 +415,7 @@ public final class Network {
      * {@code getTerminalPatternInventory()}（方法呼叫經 Forge remap，安全；GTOCore 的 full 布林同源，
      * 這裡只是算出確切格數）。
      */
-    private static int countFreePatternSlots(IExtendedPatternContainer.IPPPC ippc) {
+    private static int countFreePatternSlots(IExtendedPatternContainer ippc) {
         try {
             var inv = ippc.getTerminalPatternInventory();
             if (inv == null) {

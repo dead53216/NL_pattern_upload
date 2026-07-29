@@ -53,6 +53,8 @@ final class UploadOverlay {
     private static final int MAX_ROWS_LIMIT = 12;
     /** MACHINE_SELECT 清單裡「清除指定」列的 destIndex 哨兵值。 */
     private static final int CLEAR_ROW = -2;
+    /** 「已有該配方但被 GTO 藏掉」的置頂資訊列 sentinel（不可上傳、不可指定機器）。 */
+    private static final int EXTRA_ROW = -3;
     /** 「通用工廠」類供應器前綴（子機器名接在分隔符後，顯示時拆兩行）。 */
     private static final String[] FACTORY_PREFIXES = {"通用工廠", "通用工厂"};
     /** 通用工廠前綴與子機器名之間可能的分隔符。 */
@@ -178,6 +180,22 @@ final class UploadOverlay {
             //（gto$craftFirst 已把分子裝配室/裝配矩陣排前）。
             boolean craft = craftMode();
             GTRecipeType current = craft ? null : PatternUploadClient.currentRecipeType(screen.getMenu());
+            // 置頂資訊列：已有該配方但被 GTO 從清單移除的供應器（伺服端整網枚舉補回）。
+            // 純展示（blocked）：讓玩家一眼看到「這張樣板已經在哪」，避免重複鋪到別台。
+            for (var ex : PatternUploadClient.extraDests()) {
+                GTRecipeType sugType = PatternUploadClient.recipeTypeFromId(ex.suggest());
+                String label = ex.name();
+                Component display = sugType != null
+                        ? Component.literal(RecipeTypeIcons.name(sugType).getString())
+                        : Component.literal(label);
+                String filterText = sugType != null ? display.getString() + " (" + label + ")" : label;
+                if (!PinyinMatch.matches(filterText, filter)) {
+                    continue;
+                }
+                ItemStack icon = sugType != null ? RecipeTypeIcons.icon(sugType) : iconFromId(ex.iconId());
+                rows.add(new Row(icon, null, display, false, EXTRA_ROW, sugType,
+                        sugType != null ? label : "", null, sugType != null, true));
+            }
             // 單趟預算：每 dest 只算一次 posKey/manual/suggestion/effective/tier，
             // 避免 comparator（sortTier）每次比較與 isSuggested 各自重呼 machineFor/suggestionFor。
             record Pre(ListBoxReflector.Dest dest, String posKey, GTRecipeType effective, boolean suggested, int tier) {}
@@ -235,10 +253,26 @@ final class UploadOverlay {
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - maxRows));
     }
 
+    /** 額外資訊列 icon：群組 icon 物品 id → ItemStack；解析不到退樣板 icon。 */
+    private static ItemStack iconFromId(String id) {
+        try {
+            var rl = net.minecraft.resources.ResourceLocation.tryParse(id);
+            if (rl != null) {
+                var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(rl);
+                if (item != net.minecraft.world.item.Items.AIR) {
+                    return new ItemStack(item);
+                }
+            }
+        } catch (Throwable ignored) {
+            // 退樣板 icon
+        }
+        return RecipeTypeIcons.patternIcon();
+    }
+
     /**
      * 目的地排序層級（越小越前），0/1 視為「明確匹配」可自動上傳：
-     * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型；3 無法判定；4 手動指定但不吻合；
-     * 5 滿槽／已有該配方（後者上傳會被 GTO 忽略，視同滿槽——也因此不算進自動直傳的明確匹配）。
+     * -1 已有該配方（**置頂**展示——上傳會被 GTO 忽略，行為視同滿槽、也不算進自動直傳明確匹配）；
+     * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型；3 無法判定；4 手動指定但不吻合；5 滿槽。
      */
     static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
         // 有效機器＝手動指定優先，無則「可採用」的伺服端建議；委派給帶預算值的多載（外部呼叫者用此便捷版）
@@ -247,7 +281,10 @@ final class UploadOverlay {
 
     /** 同 {@link #sortTier(ListBoxReflector.Dest, GTRecipeType)}，但吃已算好的有效機器（rebuildRows 單趟預算用，免重算）。 */
     static int sortTier(ListBoxReflector.Dest d, GTRecipeType current, @org.jetbrains.annotations.Nullable GTRecipeType effective) {
-        if (d.full() || PatternUploadClient.hasRecipeFor(d.index())) {
+        if (PatternUploadClient.hasRecipeFor(d.index())) {
+            return -1; // 已有該配方：置頂（與被 GTO 藏掉的額外列同區）
+        }
+        if (d.full()) {
             return 5;
         }
         if (effective != null) {
@@ -373,7 +410,8 @@ final class UploadOverlay {
             Row row = rows.get(idx);
             int ry = top + i * ROW_H;
             boolean hover = mouseX >= x + 2 && mouseX < x + w - 2 && mouseY >= ry && mouseY < ry + ROW_H;
-            boolean iconHover = mode == Mode.DESTINATIONS && !craftMode() && isOverRowIcon(mouseX, mouseY, ry);
+            boolean iconHover = mode == Mode.DESTINATIONS && !craftMode() && row.destIndex() != EXTRA_ROW
+                    && isOverRowIcon(mouseX, mouseY, ry);
             if (hover && !(mode == Mode.DESTINATIONS && row.blocked() && !iconHover)) {
                 g.fill(x + 2, ry, x + w - 2, ry + ROW_H, 0x40FFFFFF);
             }
@@ -465,7 +503,7 @@ final class UploadOverlay {
             int idx = rowIndexAt(mouseX, mouseY);
             if (idx >= 0) {
                 int ry = top + (idx - scrollOff) * ROW_H;
-                if (!craftMode() && isOverRowIcon(mouseX, mouseY, ry)) {
+                if (!craftMode() && rows.get(idx).destIndex() != EXTRA_ROW && isOverRowIcon(mouseX, mouseY, ry)) {
                     g.renderTooltip(font, Component.translatable("pattern_upload.assign.tooltip"), mouseX, mouseY);
                 } else if (rows.get(idx).hasRecipe()) {
                     g.renderTooltip(font, Component.translatable("pattern_upload.has_recipe.tooltip"), mouseX, mouseY);
@@ -591,8 +629,8 @@ final class UploadOverlay {
             Row row = rows.get(idx);
             if (mode == Mode.DESTINATIONS) {
                 int ry = rowsTop() + (idx - scrollOff) * ROW_H;
-                if (!craftMode() && isOverRowIcon(mx, my, ry)) {
-                    // 點 icon → 指定該供應器對應機器（滿槽也可指定）
+                if (!craftMode() && row.destIndex() != EXTRA_ROW && isOverRowIcon(mx, my, ry)) {
+                    // 點 icon → 指定該供應器對應機器（滿槽也可指定）；置頂資訊列（EXTRA_ROW）不可指定
                     selectingName = row.providerName();
                     selectingPosKey = row.posKey();
                     // 有座標鍵即可分辨實體 → 不算共用；無座標時才看同名數量提醒共用

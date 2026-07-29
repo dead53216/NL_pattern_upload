@@ -62,6 +62,9 @@ public final class PatternUploadClient {
     /** 各目的地是否已有「與本次編碼相同主產物」的樣板（GTO 上傳去重同款判定；照 index 對齊）。 */
     @Nullable
     private static boolean[] posHasRecipe = null;
+    /** 已有該配方但被 GTO 從清單移除的供應器（伺服端整網枚舉補回；面板置頂當資訊列）。 */
+    @Nullable
+    private static java.util.List<Network.ReplyS2C.Extra> posExtras = null;
 
     /**
      * 延遲決策：處理樣板的「自動直傳 vs 開面板」決策延到伺服端座標／建議回來再判。
@@ -96,6 +99,7 @@ public final class PatternUploadClient {
         posSuggest = null;
         posFree = null;
         posHasRecipe = null;
+        posExtras = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -114,6 +118,7 @@ public final class PatternUploadClient {
         posSuggest = msg.suggest();
         posFree = msg.free();
         posHasRecipe = msg.hasRecipe();
+        posExtras = msg.extras();
         LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
         if (pendingDests != null) {
             decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板
@@ -157,6 +162,22 @@ public final class PatternUploadClient {
     static boolean hasRecipeFor(int index) {
         boolean[] h = posHasRecipe;
         return h != null && index >= 0 && index < h.length && h[index];
+    }
+
+    /** 已有該配方但被 GTO 藏掉的供應器（面板置頂資訊列）；沒回（舊伺服端）回空表。 */
+    static java.util.List<Network.ReplyS2C.Extra> extraDests() {
+        var e = posExtras;
+        return e == null ? java.util.List.of() : e;
+    }
+
+    /** 配方類型 registry id 字串 → GTRecipeType；空／解析不到回 null。 */
+    @Nullable
+    static GTRecipeType recipeTypeFromId(@Nullable String id) {
+        if (id == null || id.isEmpty()) {
+            return null;
+        }
+        ResourceLocation rl = ResourceLocation.tryParse(id);
+        return rl == null ? null : GTRegistries.RECIPE_TYPES.get(rl);
     }
 
     /**
@@ -531,7 +552,9 @@ public final class PatternUploadClient {
                     matches.add(d);
                 }
             }
-            if (matches.size() == 1) {
+            if (matches.size() == 1 && extraDests().isEmpty()) {
+                // extras 非空＝網路上已有供應器裝著這張樣板（GTO 從清單藏掉）→ 不自動直傳，
+                // 開面板讓玩家看到置頂的「已有該配方」列再自行決定（避免無感重複鋪樣板）。
                 ListBoxReflector.Dest target = matches.get(0);
                 overlay = null;
                 var player = Minecraft.getInstance().player;
@@ -662,6 +685,7 @@ public final class PatternUploadClient {
             posSuggest = null;
             posFree = null;
             posHasRecipe = null;
+            posExtras = null;
             // 清 currentRecipeType 快取（不長抓已關終端的 menu 參照）
             crtMenu = null;
             crtKey = null;
