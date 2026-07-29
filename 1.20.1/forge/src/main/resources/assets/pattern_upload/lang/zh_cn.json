@@ -11,6 +11,7 @@
   "pattern_upload.craft.title": "合成样板（分子装配室/装配矩阵）",
   "pattern_upload.dup.warn": "同名供应器会共用指定；要分开请先改名",
   "pattern_upload.empty": "没有可用的目的地",
+  "pattern_upload.free": "余 %s 格",
   "pattern_upload.full": "满",
   "pattern_upload.full.tooltip": "该目的地样板槽已满",
   "pattern_upload.no_blank": "网络中没有空白样板，未上传",

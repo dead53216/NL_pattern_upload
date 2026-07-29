@@ -382,22 +382,34 @@ final class UploadOverlay {
             int color = (mode == Mode.DESTINATIONS && row.full()) ? 0x777777 : 0xE0E0E0;
             String fullTag = (mode == Mode.DESTINATIONS && row.full())
                     ? " [" + Component.translatable("pattern_upload.full").getString() + "]" : "";
+            // 樣板槽剩餘空格（伺服端隨座標封包回報；-1＝未知不畫）：右緣置中，名稱寬度讓位避免重疊
+            int freeW = 0;
+            if (mode == Mode.DESTINATIONS) {
+                int freeN = PatternUploadClient.freeSlotsFor(row.destIndex());
+                if (freeN >= 0) {
+                    String freeStr = Component.translatable("pattern_upload.free", freeN).getString();
+                    int fw = font.width(freeStr);
+                    g.drawString(font, freeStr, x + w - 5 - fw, ry + 5, row.full() ? 0x996666 : 0x77BB77);
+                    freeW = fw + 4;
+                }
+            }
+            int nameW = w - 25 - freeW;
             if (mode == Mode.DESTINATIONS && row.type() != null && !row.providerName().isEmpty()) {
                 // 已判定機器：第一行機器名，第二行括號放（改名後的）原標籤；「通用工廠 - 子機器」只留子機器。
                 // 機器名顏色：手動指定＝白；伺服端建議（接口→存儲總線自動解析）＝青色標示，可分辨並提醒可手動覆寫。
                 String[] pf = splitFactoryName(row.providerName());
                 String label = pf != null ? pf[1] : row.providerName();
                 int nameColor = row.full() ? 0x777777 : (row.suggested() ? 0x66CCFF : color);
-                g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, w - 25), x + 21, ry + 1, nameColor);
-                g.drawString(font, font.plainSubstrByWidth("(" + label + ")", w - 25), x + 21, ry + 9, 0x999999);
+                g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, nameW), x + 21, ry + 1, nameColor);
+                g.drawString(font, font.plainSubstrByWidth("(" + label + ")", nameW), x + 21, ry + 9, 0x999999);
             } else {
                 // 未指定：「通用工廠 - 子機器」拆兩行（通用工廠 / 子機器），其餘單行置中。
                 String[] pf = mode == Mode.DESTINATIONS ? splitFactoryName(row.name().getString()) : null;
                 if (pf != null) {
-                    g.drawString(font, font.plainSubstrByWidth(pf[0], w - 25), x + 21, ry + 1, color);
-                    g.drawString(font, font.plainSubstrByWidth(pf[1] + fullTag, w - 25), x + 21, ry + 9, 0x999999);
+                    g.drawString(font, font.plainSubstrByWidth(pf[0], nameW), x + 21, ry + 1, color);
+                    g.drawString(font, font.plainSubstrByWidth(pf[1] + fullTag, nameW), x + 21, ry + 9, 0x999999);
                 } else {
-                    g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, w - 25), x + 21, ry + 5, color);
+                    g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, nameW), x + 21, ry + 5, color);
                 }
             }
         }

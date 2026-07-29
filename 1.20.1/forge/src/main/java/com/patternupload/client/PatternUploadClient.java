@@ -56,6 +56,9 @@ public final class PatternUploadClient {
     /** 伺服端建議機器（配方類型 registry id，照 index 對齊；空字串＝無建議）。接口→子網→存儲總線解析而來。 */
     @Nullable
     private static String[] posSuggest = null;
+    /** 各目的地樣板槽剩餘空格數（照 index 對齊；-1＝未知——舊伺服端／取不到）。 */
+    @Nullable
+    private static int[] posFree = null;
 
     /**
      * 延遲決策：處理樣板的「自動直傳 vs 開面板」決策延到伺服端座標／建議回來再判。
@@ -88,6 +91,7 @@ public final class PatternUploadClient {
         posDims = null;
         posPacked = null;
         posSuggest = null;
+        posFree = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -104,6 +108,7 @@ public final class PatternUploadClient {
         posDims = msg.dims();
         posPacked = msg.packed();
         posSuggest = msg.suggest();
+        posFree = msg.free();
         LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
         if (pendingDests != null) {
             decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板
@@ -135,6 +140,12 @@ public final class PatternUploadClient {
         }
         ResourceLocation rl = ResourceLocation.tryParse(sug[index]);
         return rl == null ? null : GTRegistries.RECIPE_TYPES.get(rl);
+    }
+
+    /** 第 index 個目的地的樣板槽剩餘空格數；未知（舊伺服端／沒回）回 -1。 */
+    static int freeSlotsFor(int index) {
+        int[] f = posFree;
+        return (f == null || index < 0 || index >= f.length) ? -1 : f[index];
     }
 
     /**
@@ -638,6 +649,7 @@ public final class PatternUploadClient {
             posDims = null;
             posPacked = null;
             posSuggest = null;
+            posFree = null;
             // 清 currentRecipeType 快取（不長抓已關終端的 menu 參照）
             crtMenu = null;
             crtKey = null;

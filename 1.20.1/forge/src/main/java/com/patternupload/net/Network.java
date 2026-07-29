@@ -117,9 +117,14 @@ public final class Network {
     /**
      * S2C：照 index 對齊的座標與建議機器。第 i 筆：
      * {@code dims[i]==null} 表無座標（該容器非方塊型），否則 {@code GlobalPos(dims[i], BlockPos.of(packed[i]))}；
-     * {@code suggest[i]} 為建議機器的配方類型 registry id 字串（空字串＝無建議／歧義／已可直判）。
+     * {@code suggest[i]} 為建議機器的配方類型 registry id 字串（空字串＝無建議／歧義／已可直判）；
+     * {@code free[i]} 為該供應器樣板槽剩餘空格數（-1＝未知）。
+     * <p>
+     * {@code free} 是 1.15.0 加的**尾綴欄位**（協定號不變）：encode 寫在原有欄位之後，decode 以
+     * {@code isReadable()} 偵測——舊伺服端沒寫 → 全 -1；舊客戶端不讀 → 剩餘 bytes 被丟棄無害。
+     * 兩側版本不齊皆退「無剩餘格資訊」，不斷線、不炸包。
      */
-    public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest) {
+    public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest, int[] free) {
         static void encode(ReplyS2C m, FriendlyByteBuf b) {
             b.writeVarInt(m.gen);
             b.writeVarInt(m.packed.length);
@@ -132,6 +137,9 @@ public final class Network {
                     b.writeLong(m.packed[i]);
                 }
                 b.writeUtf(m.suggest[i] == null ? "" : m.suggest[i]);
+            }
+            for (int i = 0; i < m.packed.length; i++) {
+                b.writeVarInt(m.free[i] + 1); // 偏移 1：-1（未知）也走單 byte varint
             }
         }
 
@@ -148,7 +156,15 @@ public final class Network {
                 }
                 suggest[i] = b.readUtf();
             }
-            return new ReplyS2C(gen, packed, dims, suggest);
+            int[] free = new int[n];
+            if (b.isReadable()) {
+                for (int i = 0; i < n; i++) {
+                    free[i] = b.readVarInt() - 1;
+                }
+            } else {
+                java.util.Arrays.fill(free, -1); // 舊伺服端：無尾綴
+            }
+            return new ReplyS2C(gen, packed, dims, suggest, free);
         }
     }
 
@@ -176,12 +192,14 @@ public final class Network {
             long[] packed = new long[n];
             ResourceLocation[] dims = new ResourceLocation[n];
             String[] suggest = new String[n];
+            int[] free = new int[n];
             // request 範圍內以子網 grid 為鍵快取建議機器：多個供應器橋接同一子網時只掃一次
             //（grid 拓撲在單一同步 runnable 內不變 → 恆等）
             java.util.IdentityHashMap<IGrid, String> gridCache = new java.util.IdentityHashMap<>();
             for (int i = 0; i < n; i++) {
                 Object o = containers.get(i);
                 suggest[i] = "";
+                free[i] = -1;
                 if (o instanceof IExtendedPatternContainer.IPPPC ippc) {
                     Level level = ippc.gto$getLevel();
                     BlockPos pos = ippc.gto$getBlockPos();
@@ -190,9 +208,10 @@ public final class Network {
                         packed[i] = pos.asLong();
                     }
                     suggest[i] = resolveSuggestedMachine(ippc, gridCache);
+                    free[i] = countFreePatternSlots(ippc);
                 }
             }
-            CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new ReplyS2C(msg.gen(), packed, dims, suggest));
+            CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), new ReplyS2C(msg.gen(), packed, dims, suggest, free));
         });
         ctx.setPacketHandled(true);
     }
@@ -202,6 +221,30 @@ public final class Network {
         ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
                 () -> () -> com.patternupload.client.PatternUploadClient.receiveDestPositions(msg)));
         ctx.setPacketHandled(true);
+    }
+
+    /**
+     * 供應器樣板槽剩餘空格數；取不到（inventory null／例外）回 -1（客戶端不顯示）。
+     * {@code IPPPC extends IExtendedPatternContainer extends PatternContainer} → 直接呼叫 AE2
+     * {@code getTerminalPatternInventory()}（方法呼叫經 Forge remap，安全；GTOCore 的 full 布林同源，
+     * 這裡只是算出確切格數）。
+     */
+    private static int countFreePatternSlots(IExtendedPatternContainer.IPPPC ippc) {
+        try {
+            var inv = ippc.getTerminalPatternInventory();
+            if (inv == null) {
+                return -1;
+            }
+            int freeCount = 0;
+            for (int i = 0; i < inv.size(); i++) {
+                if (inv.getStackInSlot(i).isEmpty()) {
+                    freeCount++;
+                }
+            }
+            return freeCount;
+        } catch (Throwable t) {
+            return -1;
+        }
     }
 
     // --------------------------------------------------- 建議機器（接口→子網→存儲總線）
