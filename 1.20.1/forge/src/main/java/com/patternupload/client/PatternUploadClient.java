@@ -206,6 +206,25 @@ public final class PatternUploadClient {
     }
 
     /**
+     * 聊天欄上傳回報的目標顯示：優先報**機器**——「機器名 (供應器標籤)」；機器判不出（或與標籤同名）退標籤。
+     * machine 傳入已判定的機器類型（自動直傳＝有效機器 ?? 樣板類型）；null 時合成容器以 icon 物品名當機器名
+     *（分子裝配室／裝配矩陣的 icon 即機器物品，供應器被改名時標籤是自訂名、icon 仍是機器）。
+     */
+    static net.minecraft.network.chat.Component sentDisplayName(ListBoxReflector.Dest d, @Nullable GTRecipeType machine) {
+        String label = d.name().getString();
+        String machineName = null;
+        if (machine != null) {
+            machineName = RecipeTypeIcons.name(machine).getString();
+        } else if (d.icon() != null && RecipeTypeIcons.isCraftContainer(d.icon())) {
+            machineName = d.icon().getDisplayName().getString();
+        }
+        if (machineName == null || machineName.isEmpty() || machineName.equals(label)) {
+            return d.name();
+        }
+        return net.minecraft.network.chat.Component.literal(machineName + " (" + label + ")");
+    }
+
+    /**
      * 非處理樣板（合成/鍛造/切石）只有分子裝配室或裝配矩陣能做，
      * 配方類型概念不適用；伺服端 gto$craftFirst 已把合成容器排前，本地不要再動。
      */
@@ -503,9 +522,9 @@ public final class PatternUploadClient {
             } else if (target != null) {
                 ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
                 if (player != null) {
-                    // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）
+                    // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）；目標優先報機器（icon 物品名）
                     player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                            "pattern_upload.craft.sent", target.name()), false);
+                            "pattern_upload.craft.sent", sentDisplayName(target, null)), false);
                 }
                 LOGGER.info("[pattern_upload] craft pattern sent directly to '{}'", target.name().getString());
             } else if (player != null) {
@@ -569,9 +588,12 @@ public final class PatternUploadClient {
                 }
                 ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
                 if (player != null) {
-                    // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）
+                    // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）。
+                    // 目標優先報機器：有效機器（手動指定/建議）優先，無則用樣板類型 current（本分支必非 null，
+                    // target 即以它匹配成功）——改名供應器（標籤=自訂名）也報得出機器。
+                    GTRecipeType eff = effectiveMachineFor(target);
                     player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                            "pattern_upload.sent", target.name()), false);
+                            "pattern_upload.sent", sentDisplayName(target, eff != null ? eff : current)), false);
                 }
                 LOGGER.info("[pattern_upload] pattern sent directly to '{}' (single type match)", target.name().getString());
                 return;

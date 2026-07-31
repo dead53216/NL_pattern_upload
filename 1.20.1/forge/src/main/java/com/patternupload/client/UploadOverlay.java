@@ -654,10 +654,14 @@ final class UploadOverlay {
                     }
                     ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(row.destIndex());
                     if (player != null) {
-                        // 與自動上傳一致：手動選擇上傳也在聊天欄回報。已指定列 name 只剩機器名，補回括號原標籤。
-                        Component sentName = (row.type() != null && !row.providerName().isEmpty())
-                                ? Component.literal(row.name().getString() + " (" + row.providerName() + ")")
-                                : row.name();
+                        // 與自動上傳一致：手動選擇上傳也在聊天欄回報，目標優先報機器（sentDisplayName 統一格式）。
+                        var dest = destinations.stream()
+                                .filter(dd -> dd.index() == row.destIndex()).findFirst().orElse(null);
+                        Component sentName = dest != null
+                                ? PatternUploadClient.sentDisplayName(dest, row.type())
+                                : ((row.type() != null && !row.providerName().isEmpty())
+                                        ? Component.literal(row.name().getString() + " (" + row.providerName() + ")")
+                                        : row.name());
                         player.displayClientMessage(
                                 Component.translatable("pattern_upload.sent", sentName), false);
                     }
