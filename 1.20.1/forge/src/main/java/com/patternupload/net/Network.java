@@ -125,7 +125,9 @@ public final class Network {
     /**
      * S2C：照 index 對齊的座標與建議機器。第 i 筆：
      * {@code dims[i]==null} 表無座標（該容器非方塊型），否則 {@code GlobalPos(dims[i], BlockPos.of(packed[i]))}；
-     * {@code suggest[i]} 為建議機器的配方類型 registry id 字串（空字串＝無建議／歧義／已可直判）；
+     * {@code suggest[i]} 為建議機器的配方類型 registry id 字串——1.18.0 起可為**逗號串接多類型**
+     *（多類型機器如大型冶煉廠回可用類型全集；舊客戶端 tryParse 逗號串失敗＝視同無建議，無害降級）；
+     * 空字串＝無建議／歧義／已可直判；
      * {@code free[i]} 為該供應器樣板槽剩餘空格數（-1＝未知）；
      * {@code hasRecipe[i]} 為該供應器已有「與本次編碼相同主產物」的樣板（GTO 上傳去重的同款判定）。
      * <p>
@@ -454,11 +456,11 @@ public final class Network {
                 return "";
             }
             if (adj instanceof MetaMachineBlockEntity mmbe) {
-                GTRecipeType rt = recipeTypeOf(adj);
-                if (rt == null) {
-                    rt = tesseractRecipeType(mmbe.getMetaMachine()); // 超立方體發生器：追綁定目標
+                String s = suggestionOf(adj);
+                if (s.isEmpty()) {
+                    s = tesseractSuggestion(mmbe.getMetaMachine()); // 超立方體發生器：追綁定目標
                 }
-                return rt == null ? "" : rt.registryName.toString(); // 直接貼機器：即時回報（改名後唯一判定來源）
+                return s; // 直接貼機器：即時回報（改名後唯一判定來源；可為多類型逗號串）
             }
             IGrid grid = gridOf(adj);
             if (grid == null) {
@@ -488,13 +490,13 @@ public final class Network {
      *（本地明明有機器卻判不出）。本地優先確保「本地能判者一律照舊」，跨橋只當本地無機器時的補救、零回歸。
      */
     private static String scanSubnetForMachine(IGrid startGrid) {
-        Set<GTRecipeType> found = new HashSet<>();
+        Set<String> found = new HashSet<>(); // 建議字串（joinTypes canonical）為鍵去重：同款機器不同 active 檔位不算兩機型
         // 本地優先：接口自己的子網
         if (collectStorageBusMachines(startGrid, found)) {
             return ""; // 本地就多台 → 歧義
         }
         if (found.size() == 1) {
-            return found.iterator().next().registryName.toString(); // 本地唯一 → 直接用，不跨橋
+            return found.iterator().next(); // 本地唯一 → 直接用，不跨橋
         }
         // 本地無機器 → 沿無線橋找遠端子網（fallback）
         Set<IGrid> visited = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -509,11 +511,11 @@ public final class Network {
             }
             enqueueWirelessPeers(grid, visited, queue);
         }
-        return found.size() == 1 ? found.iterator().next().registryName.toString() : "";
+        return found.size() == 1 ? found.iterator().next() : "";
     }
 
-    /** 掃單一 grid 的存儲總線、把貼的機器配方類型加進 found；本趟累計 >1（歧義）回 true。 */
-    private static boolean collectStorageBusMachines(IGrid grid, Set<GTRecipeType> found) {
+    /** 掃單一 grid 的存儲總線、把貼的機器建議字串加進 found；本趟累計 >1（歧義）回 true。 */
+    private static boolean collectStorageBusMachines(IGrid grid, Set<String> found) {
         for (var machineClass : grid.getMachineClasses()) {
             if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
                 continue;
@@ -527,9 +529,9 @@ public final class Network {
                     continue;
                 }
                 BlockPos target = busHost.getBlockPos().relative(sb.getSide());
-                GTRecipeType rt = recipeTypeOf(busHost.getLevel().getBlockEntity(target));
-                if (rt != null) {
-                    found.add(rt);
+                String s = suggestionOf(busHost.getLevel().getBlockEntity(target));
+                if (!s.isEmpty()) {
+                    found.add(s);
                     if (found.size() > 1) {
                         return true; // 歧義
                     }
@@ -681,45 +683,99 @@ public final class Network {
      *   <li>進階／定向（{@link IMultiTesseract}）：迭代 {@code getBlockEntity(i)}（定向版 GlobalPos 跨維度亦涵蓋）。</li>
      *   <li>基礎版（{@link TesseractMachine}）：單一公開欄位 {@code pos}。</li>
      * </ul>
-     * **唯一**機型才回（綁多台同型機器＝常見擺法，照判）；多機型歧義／全非機器 → null。
-     * 綁定目標又是 tesseract → 不遞迴（recipeTypeOf 判 null 跳過）；目標 chunk 未載入 → 該格 null 跳過。
+     * **唯一**機型才回（綁多台同型機器＝常見擺法，照判）；多機型歧義／全非機器 → ""。
+     * 綁定目標又是 tesseract → 不遞迴（suggestionOf 判空跳過）；目標 chunk 未載入 → 該格 null 跳過。
      */
-    @Nullable
-    private static GTRecipeType tesseractRecipeType(MetaMachine mm) {
+    private static String tesseractSuggestion(MetaMachine mm) {
         if (mm instanceof IMultiTesseract multi) {
-            Set<GTRecipeType> found = new HashSet<>();
+            Set<String> found = new HashSet<>(); // 建議字串（canonical）去重，同 collectStorageBusMachines
             int total = multi.getTotalBlockEntities();
             for (int i = 0; i < total; i++) {
-                GTRecipeType rt = recipeTypeOf(multi.getBlockEntity(i));
-                if (rt != null) {
-                    found.add(rt);
+                String s = suggestionOf(multi.getBlockEntity(i));
+                if (!s.isEmpty()) {
+                    found.add(s);
                     if (found.size() > 1) {
-                        return null; // 多機型歧義
+                        return ""; // 多機型歧義
                     }
                 }
             }
-            return found.size() == 1 ? found.iterator().next() : null;
+            return found.size() == 1 ? found.iterator().next() : "";
         }
         if (mm instanceof TesseractMachine tm && tm.pos != null && tm.getLevel() != null) {
-            return recipeTypeOf(tm.getLevel().getBlockEntity(tm.pos));
+            return suggestionOf(tm.getLevel().getBlockEntity(tm.pos));
         }
-        return null;
+        return "";
     }
 
-    /** 方塊實體是 GTCEu 機器且有配方邏輯時回其配方類型（多方塊取控制器），否則 null。 */
-    @Nullable
-    private static GTRecipeType recipeTypeOf(@Nullable BlockEntity be) {
+    /**
+     * 方塊實體的建議機器配方類型集（逗號串接 registry id，空字串＝無）。多方塊部件先讀「可程式化配方類型」
+     * 設定（{@link #programmedTypeOf}——輸入倉/總線等有設就用設定值，GTO 命名同款優先序），無設定才落到
+     * 控制器；控制器/單體機器回 {@link #joinTypes} 的**可用類型全集**——大型冶煉廠等多類型機器
+     *（冶煉＋合金冶煉）任一類型都算吻合，不再只看當下 active 類型。
+     */
+    private static String suggestionOf(@Nullable BlockEntity be) {
         if (!(be instanceof MetaMachineBlockEntity mmbe)) {
-            return null;
+            return "";
         }
         MetaMachine mm = mmbe.getMetaMachine();
+        IRecipeLogicMachine rlm = null;
         if (mm instanceof IMultiPart part) {
-            return part.getController() instanceof IRecipeLogicMachine rlm ? rlm.getRecipeType() : null;
+            String set = programmedTypeOf(mm);
+            if (!set.isEmpty()) {
+                return set; // 部件自身設定的配方類型（可程式化倉等）優先於控制器
+            }
+            if (part.getController() instanceof IRecipeLogicMachine r) {
+                rlm = r;
+            }
+        } else if (mm instanceof IRecipeLogicMachine r) {
+            rlm = r;
         }
-        if (mm instanceof IRecipeLogicMachine rlm) {
-            return rlm.getRecipeType();
+        return rlm == null ? "" : joinTypes(rlm);
+    }
+
+    /**
+     * 部件的「可程式化配方類型」設定（GTO ProgrammableHatch 等，GTO 自家命名也讀它）。
+     * 其介面 {@code IProgrammableMachine} 來自 gtmthings（gtocore JiJ 內嵌、不在編譯 classpath，
+     * 同 IBindable 雷：不能 instanceof／直呼）→ 反射 {@code getRecipeType()}；方法不存在（一般部件）、
+     * 未設定（null）或設為 HATCH_COMBINED（＝不限）皆回 ""。
+     */
+    private static String programmedTypeOf(Object partMachine) {
+        try {
+            Object v = partMachine.getClass().getMethod("getRecipeType").invoke(partMachine);
+            if (v instanceof GTRecipeType t && t != com.gtocore.common.data.GTORecipeTypes.HATCH_COMBINED) {
+                return t.registryName.toString();
+            }
+        } catch (Throwable ignored) {
+            // 無此方法／反射失敗 → 視為無設定
         }
-        return null;
+        return "";
+    }
+
+    /**
+     * 機器可用配方類型全集 → canonical 字串（依 id 排序去重、逗號串接）。排序讓同款機器不論當下 active
+     * 類型為何都得到同一字串——子網/tesseract 以字串去重判歧義，兩台同款不同檔位不能被誤判成兩機型。
+     * 濾掉 DUMMY／HATCH_COMBINED（GTO 命名同款過濾）；濾完為空退回單一 getRecipeType()。
+     */
+    private static String joinTypes(IRecipeLogicMachine rlm) {
+        try {
+            GTRecipeType[] types = rlm.getAvailableRecipeTypes();
+            java.util.TreeSet<String> ids = new java.util.TreeSet<>();
+            if (types != null) {
+                for (GTRecipeType t : types) {
+                    if (t != null && t != com.gtocore.common.data.GTORecipeTypes.DUMMY_RECIPES
+                            && t != com.gtocore.common.data.GTORecipeTypes.HATCH_COMBINED) {
+                        ids.add(t.registryName.toString());
+                    }
+                }
+            }
+            if (ids.isEmpty()) {
+                GTRecipeType single = rlm.getRecipeType();
+                return single == null ? "" : single.registryName.toString();
+            }
+            return String.join(",", ids);
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     /**

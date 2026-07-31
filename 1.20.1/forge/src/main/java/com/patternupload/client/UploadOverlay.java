@@ -183,7 +183,8 @@ final class UploadOverlay {
             // 置頂資訊列：已有該配方但被 GTO 從清單移除的供應器（伺服端整網枚舉補回）。
             // 純展示（blocked）：讓玩家一眼看到「這張樣板已經在哪」，避免重複鋪到別台。
             for (var ex : PatternUploadClient.extraDests()) {
-                GTRecipeType sugType = PatternUploadClient.recipeTypeFromId(ex.suggest());
+                GTRecipeType sugType = PatternUploadClient.pickSuggestion(
+                        PatternUploadClient.parseSuggestions(ex.suggest()), current);
                 String label = ex.name();
                 Component display = sugType != null
                         ? Component.literal(RecipeTypeIcons.name(sugType).getString())
@@ -203,7 +204,7 @@ final class UploadOverlay {
             for (var dest : destinations) {
                 String posKey = PatternUploadClient.posKeyFor(dest.index());
                 GTRecipeType manual = craft ? null : PatternUploadConfig.machineFor(posKey, dest.name().getString());
-                GTRecipeType sug = craft ? null : PatternUploadClient.usableSuggestionFor(dest);
+                GTRecipeType sug = craft ? null : PatternUploadClient.usableSuggestionFor(dest, current);
                 GTRecipeType effective = manual != null ? manual : sug; // 有效機器＝手動指定優先，無則建議
                 boolean suggested = manual == null && sug != null;       // 有效機器來自建議（非手動）→ 青色標示
                 int tier = current == null ? 0 : sortTier(dest, current, effective);
@@ -275,8 +276,9 @@ final class UploadOverlay {
      * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型；3 無法判定；4 手動指定但不吻合；5 滿槽。
      */
     static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
-        // 有效機器＝手動指定優先，無則「可採用」的伺服端建議；委派給帶預算值的多載（外部呼叫者用此便捷版）
-        return sortTier(d, current, PatternUploadClient.effectiveMachineFor(d));
+        // 有效機器＝手動指定優先，無則「可採用」的伺服端建議（多類型優先挑吻合 current 者）；
+        // 委派給帶預算值的多載（外部呼叫者用此便捷版）
+        return sortTier(d, current, PatternUploadClient.effectiveMachineFor(d, current));
     }
 
     /** 同 {@link #sortTier(ListBoxReflector.Dest, GTRecipeType)}，但吃已算好的有效機器（rebuildRows 單趟預算用，免重算）。 */

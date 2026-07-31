@@ -53,7 +53,7 @@ public final class PatternUploadClient {
     private static ResourceLocation[] posDims = null;
     @Nullable
     private static long[] posPacked = null;
-    /** 伺服端建議機器（配方類型 registry id，照 index 對齊；空字串＝無建議）。接口→子網→存儲總線解析而來。 */
+    /** 伺服端建議機器（配方類型 registry id，可逗號串接多類型，照 index 對齊；空字串＝無建議）。接口→子網→存儲總線解析而來。 */
     @Nullable
     private static String[] posSuggest = null;
     /** 各目的地樣板槽剩餘空格數（照 index 對齊；-1＝未知——舊伺服端／取不到）。 */
@@ -141,15 +141,51 @@ public final class PatternUploadClient {
         return "pos:" + dims[index] + "#" + packed[index];
     }
 
-    /** 第 index 個目的地的伺服端建議機器（接口→子網→存儲總線解析）；無建議回 null。 */
-    @Nullable
-    static GTRecipeType suggestionFor(int index) {
+    /**
+     * 第 index 個目的地的伺服端建議機器（接口→子網→存儲總線解析）配方類型清單；
+     * 1.18.0 起建議欄位可為逗號串接多類型（多類型機器如大型冶煉廠回可用類型全集）。無建議回空表。
+     */
+    static java.util.List<GTRecipeType> suggestionsFor(int index) {
         String[] sug = posSuggest;
         if (sug == null || index < 0 || index >= sug.length || sug[index] == null || sug[index].isEmpty()) {
+            return java.util.List.of();
+        }
+        return parseSuggestions(sug[index]);
+    }
+
+    /** 建議欄位字串（可含逗號多類型）→ 類型清單；解析不到者濾掉，空回空表。 */
+    static java.util.List<GTRecipeType> parseSuggestions(@Nullable String ids) {
+        if (ids == null || ids.isEmpty()) {
+            return java.util.List.of();
+        }
+        java.util.List<GTRecipeType> out = new java.util.ArrayList<>(2);
+        for (String id : ids.split(",")) {
+            ResourceLocation rl = ResourceLocation.tryParse(id.trim());
+            GTRecipeType t = rl == null ? null : GTRegistries.RECIPE_TYPES.get(rl);
+            if (t != null) {
+                out.add(t);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 類型清單中挑「顯示／排序用」單一類型：優先挑吻合 current 者（多類型機器任一類型吻合即以該類型
+     * 呈現——大型冶煉廠對合金樣板顯示合金冶煉），無吻合或無 current 取第一個；空清單回 null。
+     */
+    @Nullable
+    static GTRecipeType pickSuggestion(java.util.List<GTRecipeType> list, @Nullable GTRecipeType current) {
+        if (list.isEmpty()) {
             return null;
         }
-        ResourceLocation rl = ResourceLocation.tryParse(sug[index]);
-        return rl == null ? null : GTRegistries.RECIPE_TYPES.get(rl);
+        if (current != null) {
+            for (GTRecipeType t : list) {
+                if (RecipeTypeIcons.matchesType(t, current)) {
+                    return t;
+                }
+            }
+        }
+        return list.get(0);
     }
 
     /** 第 index 個目的地的樣板槽剩餘空格數；未知（舊伺服端／沒回）回 -1。 */
@@ -170,39 +206,29 @@ public final class PatternUploadClient {
         return e == null ? java.util.List.of() : e;
     }
 
-    /** 配方類型 registry id 字串 → GTRecipeType；空／解析不到回 null。 */
-    @Nullable
-    static GTRecipeType recipeTypeFromId(@Nullable String id) {
-        if (id == null || id.isEmpty()) {
-            return null;
-        }
-        ResourceLocation rl = ResourceLocation.tryParse(id);
-        return rl == null ? null : GTRegistries.RECIPE_TYPES.get(rl);
-    }
-
     /**
      * 該目的地「可採用」的伺服端建議：GTOCore 標籤的 icon 已可反查機器（未改名的直接貼機器等）→ 回 null，
      * 沿用既有 icon/名稱判定路徑（顯示與排序零變動）；icon 反查不到（接口類、或供應器**被改名**後
      * GTOCore 退 AE2 原生群組、機器 icon 消失）才用建議補位。伺服端對直接貼機器也回報建議（見 Network），
-     * 這道門檻確保它只在標籤判不出時生效。
+     * 這道門檻確保它只在標籤判不出時生效。多類型建議以 {@link #pickSuggestion} 擇一（優先吻合 current）。
      */
     @Nullable
-    static GTRecipeType usableSuggestionFor(ListBoxReflector.Dest d) {
-        GTRecipeType sug = suggestionFor(d.index());
-        if (sug == null) {
-            return null;
+    static GTRecipeType usableSuggestionFor(ListBoxReflector.Dest d, @Nullable GTRecipeType current) {
+        if (RecipeTypeIcons.typesForIcon(d.icon()) != null) {
+            return null; // 標籤已可判 → 原路
         }
-        return RecipeTypeIcons.typesForIcon(d.icon()) != null ? null : sug;
+        return pickSuggestion(suggestionsFor(d.index()), current);
     }
 
     /**
      * 該目的地的「有效機器」＝手動指定（座標／名稱鍵）優先，無則用可採用的伺服端建議
-     *（{@link #usableSuggestionFor}）。供 overlay 顯示、排序、tier 判定共用；手動指定永遠蓋過建議。
+     *（{@link #usableSuggestionFor}，多類型時優先挑吻合 current 者）。供 overlay 顯示、排序、tier 判定共用；
+     * 手動指定永遠蓋過建議。
      */
     @Nullable
-    static GTRecipeType effectiveMachineFor(ListBoxReflector.Dest d) {
+    static GTRecipeType effectiveMachineFor(ListBoxReflector.Dest d, @Nullable GTRecipeType current) {
         GTRecipeType manual = PatternUploadConfig.machineFor(posKeyFor(d.index()), d.name().getString());
-        return manual != null ? manual : usableSuggestionFor(d);
+        return manual != null ? manual : usableSuggestionFor(d, current);
     }
 
     /**
@@ -261,7 +287,7 @@ public final class PatternUploadClient {
         }
         String recipe = readGtoRecipe(menu);
         // 鍵：配方 id 字串 + 產物槽簽章（皆便宜）；命中即跳過整張配方表掃描
-        String key = recipe + ' ' + outputSignature(menu);
+        String key = recipe + ' ' + outputSignature(menu);
         if (menu == crtMenu && key.equals(crtKey)) {
             return crtVal;
         }
@@ -591,7 +617,7 @@ public final class PatternUploadClient {
                     // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）。
                     // 目標優先報機器：有效機器（手動指定/建議）優先，無則用樣板類型 current（本分支必非 null，
                     // target 即以它匹配成功）——改名供應器（標籤=自訂名）也報得出機器。
-                    GTRecipeType eff = effectiveMachineFor(target);
+                    GTRecipeType eff = effectiveMachineFor(target, current);
                     player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
                             "pattern_upload.sent", sentDisplayName(target, eff != null ? eff : current)), false);
                 }
