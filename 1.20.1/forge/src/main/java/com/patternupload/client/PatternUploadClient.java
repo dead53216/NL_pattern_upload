@@ -360,21 +360,6 @@ public final class PatternUploadClient {
         return mt < 0 || mt >= recipeTier;
     }
 
-    /**
-     * match 的「機器簽章」：有效機器類型＋電壓＋標籤 icon 物品＋標籤字串。
-     * 多個 match 簽章全同＝同一台機器的多個供應器／同款可互換機器 → 自動直傳可安全挑一個；
-     * 有異＝真的多台不同機器 → 開面板讓玩家選（不亂猜）。
-     */
-    private static String matchSig(ListBoxReflector.Dest d, GTRecipeType current) {
-        GTRecipeType eff = effectiveMachineFor(d, current);
-        String iconId = "";
-        if (d.icon() instanceof appeng.api.stacks.AEItemKey ik) {
-            iconId = String.valueOf(net.minecraftforge.registries.ForgeRegistries.ITEMS.getKey(ik.getItem()));
-        }
-        return (eff == null ? "" : eff.registryName.toString()) + '|' + tierFor(d.index())
-                + '|' + iconId + '|' + d.name().getString();
-    }
-
     /** 讀 GTOCore @GuiSync 欄位 gtocore$recipe（反射 Field 快取）；欄位不存在即永久停用，取值失敗則下次重抓。 */
     @Nullable
     private static String readGtoRecipe(AbstractContainerMenu menu) {
@@ -672,30 +657,9 @@ public final class PatternUploadClient {
                     matches.add(d);
                 }
             }
-            // 多個 match 但「機器簽章」全同（有效機器＋電壓＋icon＋標籤一致）＝同一台機器的多個供應器
-            // 或同款可互換機器 → 視同單一匹配：挑剩餘空格最少者（樣板集中，與面板排序一致）自動直傳。
-            // 簽章有異（真的多台不同機器）→ 照舊開面板讓玩家選。
-            ListBoxReflector.Dest single = null;
-            if (matches.size() == 1) {
-                single = matches.get(0);
-            } else if (matches.size() > 1) {
-                String sig0 = matchSig(matches.get(0), current);
-                boolean interchangeable = true;
-                for (int i = 1; i < matches.size(); i++) {
-                    if (!matchSig(matches.get(i), current).equals(sig0)) {
-                        interchangeable = false;
-                        break;
-                    }
-                }
-                if (interchangeable) {
-                    matches.sort(java.util.Comparator.comparingInt(d -> {
-                        int f = freeSlotsFor(d.index());
-                        return f < 0 ? Integer.MAX_VALUE : f; // 未知排最後；穩定排序平手維持伺服端順序
-                    }));
-                    single = matches.get(0);
-                    LOGGER.info("[pattern_upload] {} interchangeable matches → auto-pick least-free", matches.size());
-                }
-            }
+            // 嚴格唯一（1.24.0，收回 1.23.0 的「簽章全同視同單一」）：match 多於一個——
+            // 即使是同一台機器掛多個供應器／同款可互換機器——一律開面板讓玩家選，不自動直傳。
+            ListBoxReflector.Dest single = matches.size() == 1 ? matches.get(0) : null;
             if (single != null && extraDests().isEmpty()) {
                 // extras 非空＝網路上已有供應器裝著這張樣板（GTO 從清單藏掉）→ 不自動直傳，
                 // 開面板讓玩家看到置頂的「已有該配方」列再自行決定（避免無感重複鋪樣板）。
