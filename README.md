@@ -128,6 +128,11 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   未指定列直接兩行顯示，已指定列括號內只留子機器名（`splitFactoryName`，前綴後須接分隔符才拆）。
   故列高 `ROW_H` 由 16 提為 18 以容兩行。
 - 浮動面板：標題列可拖曳、左上角把手可縮放（寬/列數），位置與尺寸持久化；預設在合成欄右邊。
+  - **Ctrl+滾輪整體縮放（1.22.0）**：滑鼠在面板上按住 Ctrl 滾動 → 面板連同字體整體縮放
+    （0.5–2.0、一格 0.1，`panelScale` 持久化）。實作：render 以面板左上角為錨點 pose scale；
+    內部座標一律「邏輯座標」，滑鼠入口（click/drag/scroll/hover）以 `lx/ly` 反除縮放換算，
+    tooltip 傳邏輯座標經縮放 pose 映回螢幕原位。拖曳移動與 dragOff 維持螢幕座標（1:1 跟手）、
+    右下角改尺寸用邏輯座標；螢幕邊界 clamp 用縮放後實寬。非整數倍縮放字體會稍糊（原版字型限制）。
 - **置頂**：`Render.Post` 監聽器設 `EventPriority.LOWEST`（最後畫）→ 面板蓋過 EMI/JEI 右側物品；
   點擊 `MouseButtonPressed.Pre` 設 `HIGHEST`（最先吃）→ 面板先接管點擊，物品瀏覽器搶不走。
 - ESC：MACHINE_SELECT → 回清單 → 關 overlay → 關終端；搜尋欄聚焦時吞按鍵避免 `E` 關閉介面。

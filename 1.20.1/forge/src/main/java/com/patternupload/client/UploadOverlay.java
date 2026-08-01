@@ -70,6 +70,10 @@ final class UploadOverlay {
     private int y;
     private int w;
     private int maxRows;
+    /** 面板整體縮放（Ctrl+滾輪調整，0.5–2.0；含字體）。內部座標一律「邏輯座標」，畫面經 pose scale 呈現。 */
+    private float uiScale = 1.0f;
+    private static final float MIN_SCALE = 0.5f;
+    private static final float MAX_SCALE = 2.0f;
     private boolean dragging = false;
     private boolean resizing = false;
     private int dragOffX;
@@ -105,10 +109,12 @@ final class UploadOverlay {
         this.font = Minecraft.getInstance().font;
         this.w = clamp(orDefault(PatternUploadConfig.panelW(), DEFAULT_W), MIN_W, MAX_W);
         this.maxRows = clamp(orDefault(PatternUploadConfig.panelRows(), DEFAULT_ROWS), MIN_ROWS, MAX_ROWS_LIMIT);
+        Float ps = PatternUploadConfig.panelScale();
+        this.uiScale = ps == null ? 1.0f : Math.max(MIN_SCALE, Math.min(MAX_SCALE, ps));
         Integer px = PatternUploadConfig.panelX();
         Integer py = PatternUploadConfig.panelY();
         if (px != null && py != null) {
-            this.x = Math.max(0, Math.min(px, screen.width - w));
+            this.x = Math.max(0, Math.min(px, screen.width - scaledW()));
             this.y = Math.max(0, Math.min(py, screen.height - 40));
         } else {
             defaultPosition();
@@ -146,8 +152,8 @@ final class UploadOverlay {
             gx = screen.getGuiLeft() + screen.getXSize() + 4;
             gy = screen.getGuiTop() + 4;
         }
-        this.x = Math.max(0, Math.min(gx, screen.width - w));
-        this.y = Math.max(2, Math.min(gy, screen.height - heightFor(maxRows) - 2));
+        this.x = Math.max(0, Math.min(gx, screen.width - scaledW()));
+        this.y = Math.max(2, Math.min(gy, screen.height - Math.round(heightFor(maxRows) * uiScale) - 2));
     }
 
     private static int orDefault(Integer v, int def) {
@@ -156,6 +162,23 @@ final class UploadOverlay {
 
     private static int clamp(int v, int min, int max) {
         return Math.max(min, Math.min(v, max));
+    }
+
+    // ------------------------------------------------------------- 縮放座標
+
+    /** 面板在螢幕上的實際寬（邏輯寬 × 縮放）。 */
+    private int scaledW() {
+        return Math.round(w * uiScale);
+    }
+
+    /** 螢幕滑鼠 X → 面板邏輯座標（以面板左上角 (x,y) 為縮放錨點）。 */
+    private double lx(double mx) {
+        return x + (mx - x) / uiScale;
+    }
+
+    /** 螢幕滑鼠 Y → 面板邏輯座標。 */
+    private double ly(double my) {
+        return y + (my - y) / uiScale;
     }
 
     PatternEncodingTermScreen<?> screen() {
@@ -401,7 +424,16 @@ final class UploadOverlay {
 
     // ---------------------------------------------------------------- render
 
-    void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+    void render(GuiGraphics g, int rawMouseX, int rawMouseY, float partialTick) {
+        // 整面板（含字體）以 (x,y) 為錨點縮放；滑鼠先轉邏輯座標，後續 hover/tooltip 沿用邏輯座標
+        //（tooltip 傳邏輯座標、經縮放 pose 映回螢幕原位，位置不偏）。
+        int mouseX = (int) lx(rawMouseX);
+        int mouseY = (int) ly(rawMouseY);
+        var pose = g.pose();
+        pose.pushPose();
+        pose.translate(x, y, 0);
+        pose.scale(uiScale, uiScale, 1);
+        pose.translate(-x, -y, 0);
         int h = panelHeight();
 
         g.fill(x, y, x + w, y + h, 0xF0141414);
@@ -539,6 +571,7 @@ final class UploadOverlay {
                 }
             }
         }
+        pose.popPose();
     }
 
     // ----------------------------------------------------------------- input
@@ -569,9 +602,9 @@ final class UploadOverlay {
 
     boolean mouseDragged(double mx, double my, int button, double dragX, double dragY) {
         if (resizing) {
-            // 以左上角為錨點，拖右下角改寬與列數
-            w = clamp((int) mx - x, MIN_W, MAX_W);
-            int targetH = (int) my - y;
+            // 以左上角為錨點，拖右下角改寬與列數（邏輯座標：縮放後拖曳手感 1:1 對映視覺大小）
+            w = clamp((int) lx(mx) - x, MIN_W, MAX_W);
+            int targetH = (int) ly(my) - y;
             maxRows = clamp(Math.round((targetH - HEADER_H - 2 - FOOTER_H) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
             searchBox.setWidth(w - 34);
             rebuildRows();
@@ -580,7 +613,8 @@ final class UploadOverlay {
         if (!dragging) {
             return false;
         }
-        x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - w));
+        // 拖曳移動用螢幕座標（面板錨點 (x,y) 本來就是螢幕座標，1:1 跟手）
+        x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - scaledW()));
         y = Math.max(0, Math.min((int) my - dragOffY, screen.height - 40));
         searchBox.setX(x + 21);
         searchBox.setY(y + 3);
@@ -610,6 +644,10 @@ final class UploadOverlay {
     }
 
     boolean mouseClicked(double mx, double my, int button) {
+        double rawMx = mx;
+        double rawMy = my;
+        mx = lx(mx);
+        my = ly(my); // 之後全用邏輯座標；拖曳位移例外（下方 dragOff 用螢幕座標）
         if (!isInside(mx, my)) {
             searchBox.setFocused(false);
             return false;
@@ -647,8 +685,8 @@ final class UploadOverlay {
         }
         if (isOverDragHandle(mx, my)) {
             dragging = true;
-            dragOffX = (int) mx - x;
-            dragOffY = (int) my - y;
+            dragOffX = (int) rawMx - x; // 拖曳位移以螢幕座標記（mouseDragged 同座標系）
+            dragOffY = (int) rawMy - y;
             return true;
         }
         int idx = rowIndexAt(mx, my);
@@ -757,8 +795,15 @@ final class UploadOverlay {
     }
 
     boolean mouseScrolled(double mx, double my, double delta) {
-        if (!isInside(mx, my)) {
+        if (!isInside(lx(mx), ly(my))) {
             return false;
+        }
+        // Ctrl+滾輪：調整面板整體縮放（0.5–2.0，一格 0.1；含字體），即時生效並落盤
+        if (net.minecraft.client.gui.screens.Screen.hasControlDown()) {
+            float next = uiScale + 0.1f * Math.signum((float) delta);
+            uiScale = Math.round(Math.max(MIN_SCALE, Math.min(MAX_SCALE, next)) * 10f) / 10f;
+            PatternUploadConfig.saveScale(uiScale);
+            return true;
         }
         scrollOff = Math.max(0, Math.min(scrollOff - (int) Math.signum(delta), rows.size() - maxRows));
         return true;

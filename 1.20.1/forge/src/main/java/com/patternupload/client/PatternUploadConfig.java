@@ -46,6 +46,9 @@ final class PatternUploadConfig {
     static Integer panelW;
     @Nullable
     static Integer panelRows;
+    /** 面板整體縮放（Ctrl+滾輪調整；null＝1.0）。 */
+    @Nullable
+    static Float panelScale;
 
     private PatternUploadConfig() {}
 
@@ -76,6 +79,9 @@ final class PatternUploadConfig {
             if (root.has("panelRows")) {
                 panelRows = root.get("panelRows").getAsInt();
             }
+            if (root.has("panelScale")) {
+                panelScale = root.get("panelScale").getAsFloat();
+            }
         } catch (Throwable t) {
             LOGGER.error("[pattern_upload] 讀取 {} 失敗，改用空設定", FILE, t);
         }
@@ -97,6 +103,9 @@ final class PatternUploadConfig {
             }
             if (panelRows != null) {
                 root.addProperty("panelRows", panelRows);
+            }
+            if (panelScale != null) {
+                root.addProperty("panelScale", panelScale);
             }
             Files.createDirectories(FILE.getParent());
             try (Writer writer = Files.newBufferedWriter(FILE, StandardCharsets.UTF_8)) {
@@ -178,5 +187,18 @@ final class PatternUploadConfig {
     static Integer panelRows() {
         load();
         return panelRows;
+    }
+
+    @Nullable
+    static Float panelScale() {
+        load();
+        return panelScale;
+    }
+
+    /** 面板縮放變動即落盤（Ctrl+滾輪一步一存，量小無妨）。 */
+    static void saveScale(float scale) {
+        load();
+        panelScale = scale;
+        save();
     }
 }
