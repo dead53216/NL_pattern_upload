@@ -65,6 +65,9 @@ public final class PatternUploadClient {
     /** 已有該配方但被 GTO 從清單移除的供應器（伺服端整網枚舉補回；面板置頂當資訊列）。 */
     @Nullable
     private static java.util.List<Network.ReplyS2C.Extra> posExtras = null;
+    /** 各目的地建議機器的電壓等級名（GTValues.VN 如 "LV"，照 index 對齊；空字串＝未知）。 */
+    @Nullable
+    private static String[] posTier = null;
 
     /**
      * 延遲決策：處理樣板的「自動直傳 vs 開面板」決策延到伺服端座標／建議回來再判。
@@ -100,6 +103,7 @@ public final class PatternUploadClient {
         posFree = null;
         posHasRecipe = null;
         posExtras = null;
+        posTier = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -119,6 +123,7 @@ public final class PatternUploadClient {
         posFree = msg.free();
         posHasRecipe = msg.hasRecipe();
         posExtras = msg.extras();
+        posTier = msg.tier();
         LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
         if (pendingDests != null) {
             decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板
@@ -186,6 +191,12 @@ public final class PatternUploadClient {
             }
         }
         return list.get(0);
+    }
+
+    /** 第 index 個目的地建議機器的電壓等級名（"LV" 等）；未知（舊伺服端／沒回／判不出）回 ""。 */
+    static String tierFor(int index) {
+        String[] t = posTier;
+        return (t == null || index < 0 || index >= t.length || t[index] == null) ? "" : t[index];
     }
 
     /** 第 index 個目的地的樣板槽剩餘空格數；未知（舊伺服端／沒回）回 -1。 */
@@ -734,6 +745,7 @@ public final class PatternUploadClient {
             posFree = null;
             posHasRecipe = null;
             posExtras = null;
+            posTier = null;
             // 清 currentRecipeType 快取（不長抓已關終端的 menu 參照）
             crtMenu = null;
             crtKey = null;

@@ -135,13 +135,16 @@ public final class Network {
      * {@code canAddPattern && containsPrimaryOutput}——客戶端清單根本沒有這些列），伺服端照 GTO 同款
      * 枚舉整網補回，客戶端置頂展示（純資訊列、不可上傳）。
      * <p>
-     * {@code free}（1.15.0）、{@code hasRecipe}（1.16.0）、{@code extras}（1.17.0）是**尾綴欄位**
-     *（協定號不變）：encode 依序寫在原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——舊伺服端
-     * 沒寫 → 該段取預設（-1／false／空表）；舊客戶端不讀 → 剩餘 bytes 被丟棄無害。
+     * {@code tier[i]} 為建議機器的電壓等級名（{@code GTValues.VN}，如 "LV"；空字串＝未知）：
+     * 與建議同路解析（直貼／tesseract 綁定唯一電壓／子網唯一機器），供面板顯示與搜尋。
+     * <p>
+     * {@code free}（1.15.0）、{@code hasRecipe}（1.16.0）、{@code extras}（1.17.0）、{@code tier}（1.20.0）
+     * 是**尾綴欄位**（協定號不變）：encode 依序寫在原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——
+     * 舊伺服端沒寫 → 該段取預設（-1／false／空表／""）；舊客戶端不讀 → 剩餘 bytes 被丟棄無害。
      * 兩側版本不齊皆退預設值，不斷線、不炸包。
      */
     public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest, int[] free,
-                           boolean[] hasRecipe, List<Extra> extras) {
+                           boolean[] hasRecipe, List<Extra> extras, String[] tier) {
 
         /** 被 GTO 藏掉的「已有該配方」供應器：GTOCore 群組標籤名、群組 icon 物品 id、建議機器、剩餘格。 */
         public record Extra(String name, String iconId, String suggest, int free) {}
@@ -170,6 +173,9 @@ public final class Network {
                 b.writeUtf(e.iconId());
                 b.writeUtf(e.suggest());
                 b.writeVarInt(e.free() + 1);
+            }
+            for (int i = 0; i < m.packed.length; i++) {
+                b.writeUtf(m.tier[i] == null ? "" : m.tier[i]);
             }
         }
 
@@ -207,7 +213,14 @@ public final class Network {
                     extras.add(new Extra(b.readUtf(), b.readUtf(), b.readUtf(), b.readVarInt() - 1));
                 }
             }
-            return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe, extras);
+            String[] tier = new String[n];
+            java.util.Arrays.fill(tier, ""); // 舊伺服端：無尾綴 → 全未知
+            if (b.isReadable()) {
+                for (int i = 0; i < n; i++) {
+                    tier[i] = b.readUtf();
+                }
+            }
+            return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe, extras, tier);
         }
     }
 
@@ -235,16 +248,18 @@ public final class Network {
             long[] packed = new long[n];
             ResourceLocation[] dims = new ResourceLocation[n];
             String[] suggest = new String[n];
+            String[] tier = new String[n];
             int[] free = new int[n];
             boolean[] hasRecipe = new boolean[n];
             // 本次編碼樣板的主產物（GTO 上傳去重同款判定：mixin 暫存 gto$patternStack → decode → primaryOutput）
             AEKey primaryOut = primaryOutputOfEncoding(menu, player.level());
-            // request 範圍內以子網 grid 為鍵快取建議機器：多個供應器橋接同一子網時只掃一次
+            // request 範圍內以子網 grid 為鍵快取建議機器＋電壓：多個供應器橋接同一子網時只掃一次
             //（grid 拓撲在單一同步 runnable 內不變 → 恆等）
-            java.util.IdentityHashMap<IGrid, String> gridCache = new java.util.IdentityHashMap<>();
+            java.util.IdentityHashMap<IGrid, String[]> gridCache = new java.util.IdentityHashMap<>();
             for (int i = 0; i < n; i++) {
                 Object o = containers.get(i);
                 suggest[i] = "";
+                tier[i] = "";
                 free[i] = -1;
                 if (o instanceof IExtendedPatternContainer.IPPPC ippc) {
                     Level level = ippc.gto$getLevel();
@@ -253,7 +268,9 @@ public final class Network {
                         dims[i] = level.dimension().location();
                         packed[i] = pos.asLong();
                     }
-                    suggest[i] = resolveSuggestedMachine(ippc, gridCache);
+                    String[] r = resolveSuggested(ippc, gridCache);
+                    suggest[i] = r[0];
+                    tier[i] = r[1];
                     free[i] = countFreePatternSlots(ippc);
                     hasRecipe[i] = primaryOut != null && containsPrimaryOutput(ippc, primaryOut, player.level());
                 }
@@ -264,7 +281,7 @@ public final class Network {
                     ? List.of()
                     : findHiddenHasRecipe((PatternEncodingTermMenu) menu, containers, primaryOut, player.level(), gridCache);
             CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
-                    new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe, extras));
+                    new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe, extras, tier));
         });
         ctx.setPacketHandled(true);
     }
@@ -305,7 +322,7 @@ public final class Network {
      */
     private static List<ReplyS2C.Extra> findHiddenHasRecipe(PatternEncodingTermMenu menu, List<?> current,
                                                             AEKey primaryOut, Level level,
-                                                            java.util.IdentityHashMap<IGrid, String> gridCache) {
+                                                            java.util.IdentityHashMap<IGrid, String[]> gridCache) {
         List<ReplyS2C.Extra> out = new ArrayList<>();
         try {
             IGridNode node = menu.getNetworkNode();
@@ -339,7 +356,7 @@ public final class Network {
                         // 標籤取不到 → 空字串（客戶端退樣板 icon／空名）
                     }
                     String sug = c instanceof IExtendedPatternContainer.IPPPC ippc
-                            ? resolveSuggestedMachine(ippc, gridCache) : "";
+                            ? resolveSuggested(ippc, gridCache)[0] : "";
                     out.add(new ReplyS2C.Extra(name, iconId, sug, countFreePatternSlots(c)));
                     if (out.size() >= MAX_EXTRAS) {
                         break outer;
@@ -449,12 +466,15 @@ public final class Network {
      * 貼「超立方體發生器」（無配方邏輯的代理機器）→ 追其綁定目標判定（見 {@link #tesseractSuggestion}；
      * 存儲總線貼 tesseract 亦同，走 {@link #suggestionOrTesseract}）。
      */
-    private static String resolveSuggestedMachine(IExtendedPatternContainer.IPPPC ippc,
-                                                  java.util.IdentityHashMap<IGrid, String> gridCache) {
+    /** 「無建議」雙值常量（{建議, 電壓}）；只讀不改，安全共用。 */
+    private static final String[] NONE = { "", "" };
+
+    private static String[] resolveSuggested(IExtendedPatternContainer.IPPPC ippc,
+                                             java.util.IdentityHashMap<IGrid, String[]> gridCache) {
         try {
             BlockEntity adj = IExtendedPatternContainer.getPushBlockEntity(ippc);
             if (adj == null) {
-                return "";
+                return NONE;
             }
             if (adj instanceof MetaMachineBlockEntity) {
                 // 直接貼機器：即時回報（改名後唯一判定來源；可為多類型逗號串）；tesseract 追綁定目標
@@ -462,17 +482,17 @@ public final class Network {
             }
             IGrid grid = gridOf(adj);
             if (grid == null) {
-                return "";
+                return NONE;
             }
-            String cached = gridCache.get(grid);
+            String[] cached = gridCache.get(grid);
             if (cached != null) {
-                return cached; // 同一子網已掃過（含解析為 "" 的情形）
+                return cached; // 同一子網已掃過（含解析為無建議的情形）
             }
-            String result = scanSubnetForMachine(grid);
+            String[] result = scanSubnetForMachine(grid);
             gridCache.put(grid, result);
             return result;
         } catch (Throwable t) {
-            return "";
+            return NONE;
         }
     }
 
@@ -487,14 +507,15 @@ public final class Network {
      * 為何本地優先：網路若全走無線橋，從任一接口子網 BFS 會撈到整網各子網的機器 → 幾乎必然多機型歧義 → 回 ""
      *（本地明明有機器卻判不出）。本地優先確保「本地能判者一律照舊」，跨橋只當本地無機器時的補救、零回歸。
      */
-    private static String scanSubnetForMachine(IGrid startGrid) {
-        Set<String> found = new HashSet<>(); // 建議字串為鍵去重（多台同型同模式＝一種；不同模式＝兩種，歧義不猜）
+    private static String[] scanSubnetForMachine(IGrid startGrid) {
+        // 建議字串為鍵去重（多台同型同模式＝一種；不同模式＝兩種，歧義不猜）；值＝首見機器的電壓
+        java.util.LinkedHashMap<String, String> found = new java.util.LinkedHashMap<>();
         // 本地優先：接口自己的子網
         if (collectStorageBusMachines(startGrid, found)) {
-            return ""; // 本地就多台 → 歧義
+            return NONE; // 本地就多台 → 歧義
         }
         if (found.size() == 1) {
-            return found.iterator().next(); // 本地唯一 → 直接用，不跨橋
+            return firstEntry(found); // 本地唯一 → 直接用，不跨橋
         }
         // 本地無機器 → 沿無線橋找遠端子網（fallback）
         Set<IGrid> visited = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -505,15 +526,20 @@ public final class Network {
         while (!queue.isEmpty() && guard++ < MAX_SCAN_GRIDS) {
             IGrid grid = queue.poll();
             if (collectStorageBusMachines(grid, found)) {
-                return "";
+                return NONE;
             }
             enqueueWirelessPeers(grid, visited, queue);
         }
-        return found.size() == 1 ? found.iterator().next() : "";
+        return found.size() == 1 ? firstEntry(found) : NONE;
     }
 
-    /** 掃單一 grid 的存儲總線、把貼的機器建議字串加進 found；本趟累計 >1（歧義）回 true。 */
-    private static boolean collectStorageBusMachines(IGrid grid, Set<String> found) {
+    private static String[] firstEntry(java.util.LinkedHashMap<String, String> found) {
+        var e = found.entrySet().iterator().next();
+        return new String[] { e.getKey(), e.getValue() };
+    }
+
+    /** 掃單一 grid 的存儲總線、把貼的機器（建議字串→電壓）加進 found；本趟累計 >1（歧義）回 true。 */
+    private static boolean collectStorageBusMachines(IGrid grid, java.util.LinkedHashMap<String, String> found) {
         for (var machineClass : grid.getMachineClasses()) {
             if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
                 continue;
@@ -528,9 +554,9 @@ public final class Network {
                 }
                 BlockPos target = busHost.getBlockPos().relative(sb.getSide());
                 // 總線貼 tesseract 也追綁定目標（1.18.1）：suggestionOrTesseract 共用直貼機器同款解析
-                String s = suggestionOrTesseract(busHost.getLevel().getBlockEntity(target));
-                if (!s.isEmpty()) {
-                    found.add(s);
+                String[] st = suggestionOrTesseract(busHost.getLevel().getBlockEntity(target));
+                if (!st[0].isEmpty()) {
+                    found.putIfAbsent(st[0], st[1]);
                     if (found.size() > 1) {
                         return true; // 歧義
                     }
@@ -688,34 +714,84 @@ public final class Network {
      * 不含未選用的模式。客戶端 pickSuggestion 從聯集挑吻合本次樣板者顯示。
      * 綁定目標又是 tesseract → 不遞迴（suggestionOf 判空跳過）；目標 chunk 未載入 → 該格 null 跳過。
      */
-    private static String tesseractSuggestion(MetaMachine mm) {
+    private static String[] tesseractSuggestion(MetaMachine mm) {
         if (mm instanceof IMultiTesseract multi) {
             java.util.TreeSet<String> union = new java.util.TreeSet<>(); // canonical：排序去重
+            java.util.TreeSet<String> tiers = new java.util.TreeSet<>();
             int total = multi.getTotalBlockEntities();
             for (int i = 0; i < total; i++) {
-                String s = suggestionOf(multi.getBlockEntity(i));
+                BlockEntity be = multi.getBlockEntity(i);
+                String s = suggestionOf(be);
                 if (!s.isEmpty()) {
                     union.addAll(java.util.Arrays.asList(s.split(",")));
+                    String tn = tierNameOf(be);
+                    if (!tn.isEmpty()) {
+                        tiers.add(tn);
+                    }
                 }
             }
-            return String.join(",", union);
+            // 電壓：綁定機器唯一電壓才回報（多電壓混綁不猜）
+            return new String[] { String.join(",", union), tiers.size() == 1 ? tiers.first() : "" };
         }
         if (mm instanceof TesseractMachine tm && tm.pos != null && tm.getLevel() != null) {
-            return suggestionOf(tm.getLevel().getBlockEntity(tm.pos));
+            BlockEntity t = tm.getLevel().getBlockEntity(tm.pos);
+            return new String[] { suggestionOf(t), tierNameOf(t) };
         }
-        return "";
+        return NONE;
     }
 
     /**
-     * 直貼機器與總線目標共用：機器建議字串；空且為 GT 機器 → 追 tesseract 綁定目標
+     * 直貼機器與總線目標共用：{建議字串, 電壓等級名}；建議空且為 GT 機器 → 追 tesseract 綁定目標
      *（tesseract 自身無配方邏輯，suggestionOf 必空 → 不誤觸一般機器）。
      */
-    private static String suggestionOrTesseract(@Nullable BlockEntity be) {
+    private static String[] suggestionOrTesseract(@Nullable BlockEntity be) {
         String s = suggestionOf(be);
-        if (s.isEmpty() && be instanceof MetaMachineBlockEntity mmbe) {
-            s = tesseractSuggestion(mmbe.getMetaMachine());
+        if (!s.isEmpty()) {
+            return new String[] { s, tierNameOf(be) };
         }
-        return s;
+        if (be instanceof MetaMachineBlockEntity mmbe) {
+            return tesseractSuggestion(mmbe.getMetaMachine());
+        }
+        return NONE;
+    }
+
+    /** 方塊實體所屬機器的電壓等級名；非 GT 機器回 ""。 */
+    private static String tierNameOf(@Nullable BlockEntity be) {
+        return be instanceof MetaMachineBlockEntity mmbe ? machineTierName(mmbe.getMetaMachine()) : "";
+    }
+
+    /**
+     * 機器電壓等級名（{@code GTValues.VN} 素字串，如 "LV"；判不出回 ""）。多方塊部件取控制器。
+     * 判定優先序照 GTOCore 命名 helper（getMachineRecipeTier）：ITieredMachine.getTier ≥0 →
+     * IOverclockMachine.getMaxOverclockTier ≥0 → 超頻電壓反推 floor tier。
+     */
+    private static String machineTierName(MetaMachine mm) {
+        try {
+            MetaMachine m = mm;
+            if (mm instanceof IMultiPart part && part.getController() != null) {
+                m = part.getController().self();
+            }
+            Integer tier = null;
+            if (m instanceof com.gregtechceu.gtceu.api.machine.feature.ITieredMachine tm && tm.getTier() >= 0) {
+                tier = tm.getTier();
+            } else if (m instanceof com.gregtechceu.gtceu.api.machine.feature.IOverclockMachine oc) {
+                if (oc.getMaxOverclockTier() >= 0) {
+                    tier = oc.getMaxOverclockTier();
+                } else {
+                    long v = oc.getOverclockVoltage();
+                    if (v > 0) {
+                        tier = (int) com.gregtechceu.gtceu.utils.GTUtil.getFloorTierByVoltage(v);
+                    }
+                }
+            }
+            if (tier == null) {
+                return "";
+            }
+            String[] vn = com.gregtechceu.gtceu.api.GTValues.VN;
+            return (tier >= 0 && tier < vn.length) ? vn[tier] : "MAX";
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     /**

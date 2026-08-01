@@ -231,10 +231,13 @@ final class UploadOverlay {
                 String providerName = dest.name().getString();
                 GTRecipeType assigned = p.effective();
                 Component display = dest.name();
-                String filterText = providerName;
+                // 搜尋鍵一律含伺服端回的電壓等級（"LV" 等）——GTO 標籤有無帶電壓都搜得到（1.20.0）
+                String tier = PatternUploadClient.tierFor(dest.index());
+                String filterText = providerName + (tier.isEmpty() ? "" : " " + tier);
                 if (assigned != null) {
-                    // 已判定機器：icon 換成該機器；第一行只放機器名，原標籤（改名後的自訂名）換行放括號裡（見 render）。
-                    String machineName = RecipeTypeIcons.name(assigned).getString();
+                    // 已判定機器：icon 換成該機器；第一行放「機器名＋電壓」，原標籤（改名後的自訂名）換行放括號裡（見 render）。
+                    String machineName = RecipeTypeIcons.name(assigned).getString()
+                            + (tier.isEmpty() ? "" : " " + tier);
                     display = Component.literal(machineName);
                     filterText = machineName + " (" + providerName + ")";
                 }
