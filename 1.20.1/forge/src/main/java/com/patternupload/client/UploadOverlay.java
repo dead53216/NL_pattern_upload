@@ -197,9 +197,10 @@ final class UploadOverlay {
                 rows.add(new Row(icon, null, display, false, EXTRA_ROW, sugType,
                         sugType != null ? label : "", null, sugType != null, true));
             }
-            // 單趟預算：每 dest 只算一次 posKey/manual/suggestion/effective/tier，
+            // 單趟預算：每 dest 只算一次 posKey/manual/suggestion/effective/tier/free，
             // 避免 comparator（sortTier）每次比較與 isSuggested 各自重呼 machineFor/suggestionFor。
-            record Pre(ListBoxReflector.Dest dest, String posKey, GTRecipeType effective, boolean suggested, int tier) {}
+            record Pre(ListBoxReflector.Dest dest, String posKey, GTRecipeType effective, boolean suggested,
+                       int tier, int free, String groupKey) {}
             List<Pre> pre = new ArrayList<>(destinations.size());
             for (var dest : destinations) {
                 String posKey = PatternUploadClient.posKeyFor(dest.index());
@@ -208,10 +209,22 @@ final class UploadOverlay {
                 GTRecipeType effective = manual != null ? manual : sug; // 有效機器＝手動指定優先，無則建議
                 boolean suggested = manual == null && sug != null;       // 有效機器來自建議（非手動）→ 青色標示
                 int tier = current == null ? 0 : sortTier(dest, current, effective);
-                pre.add(new Pre(dest, posKey, effective, suggested, tier));
+                // 相同機器列的次序鍵：剩餘空格小→大（-1 未知排最後）；群組鍵＝有效機器，判不出者退標籤
+                int fr = PatternUploadClient.freeSlotsFor(dest.index());
+                String groupKey = effective != null ? effective.registryName.toString() : dest.name().getString();
+                pre.add(new Pre(dest, posKey, effective, suggested, tier, fr < 0 ? Integer.MAX_VALUE : fr, groupKey));
             }
             if (current != null) {
                 pre.sort(Comparator.comparingInt(Pre::tier)); // 穩定排序，同層維持伺服端順序
+                // 相同機器依剩餘空格由小到大（優先塞快滿的、樣板集中）：群組錨定在「該群同層首見位置」——
+                // 同機器列聚在一起照 free 升冪，跨群與跨層仍維持上面 tier 排序後的相對順序（不亂跳）。
+                java.util.Map<String, Integer> groupFirst = new java.util.HashMap<>();
+                for (int i = 0; i < pre.size(); i++) {
+                    groupFirst.putIfAbsent(pre.get(i).tier() + "|" + pre.get(i).groupKey(), i);
+                }
+                pre.sort(Comparator
+                        .comparingInt((Pre p) -> groupFirst.get(p.tier() + "|" + p.groupKey()))
+                        .thenComparingInt(Pre::free));
             }
             for (var p : pre) {
                 var dest = p.dest();
