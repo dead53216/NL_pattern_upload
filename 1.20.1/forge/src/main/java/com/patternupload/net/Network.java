@@ -488,7 +488,7 @@ public final class Network {
      *（本地明明有機器卻判不出）。本地優先確保「本地能判者一律照舊」，跨橋只當本地無機器時的補救、零回歸。
      */
     private static String scanSubnetForMachine(IGrid startGrid) {
-        Set<String> found = new HashSet<>(); // 建議字串（joinTypes canonical）為鍵去重：同款機器不同 active 檔位不算兩機型
+        Set<String> found = new HashSet<>(); // 建議字串為鍵去重（多台同型同模式＝一種；不同模式＝兩種，歧義不猜）
         // 本地優先：接口自己的子網
         if (collectStorageBusMachines(startGrid, found)) {
             return ""; // 本地就多台 → 歧義
@@ -683,9 +683,9 @@ public final class Network {
      *   <li>基礎版（{@link TesseractMachine}）：單一公開欄位 {@code pos}。</li>
      * </ul>
      * 1.18.1 起綁定目標取**聯集**（不再唯一機型歧義回 ""）：tesseract 本就把物品/流體 I/O 分派給所有
-     * 綁定機器——樣板類型吻合**任一**綁定機器即可正確上傳；聯集同時消滅「多台同款多配方機器、
-     * 解鎖/配置不同 → 可用類型字串不同 → 誤判多機型歧義」的 1.18.0 回歸（1.17.1 以單一 active 類型
-     * 去重時同款同檔恰好唯一、判得出）。客戶端 pickSuggestion 從聯集挑吻合本次樣板者顯示。
+     * 綁定機器——樣板類型吻合**任一**綁定機器即可正確上傳。1.19.1 起每台機器只貢獻其「已決定」類型
+     *（{@link #machineTypeOf}：多類型機器＝當下設定的模式）——聯集涵蓋的是各台「真的會跑」的類型，
+     * 不含未選用的模式。客戶端 pickSuggestion 從聯集挑吻合本次樣板者顯示。
      * 綁定目標又是 tesseract → 不遞迴（suggestionOf 判空跳過）；目標 chunk 未載入 → 該格 null 跳過。
      */
     private static String tesseractSuggestion(MetaMachine mm) {
@@ -719,10 +719,9 @@ public final class Network {
     }
 
     /**
-     * 方塊實體的建議機器配方類型集（逗號串接 registry id，空字串＝無）。多方塊部件先讀「可程式化配方類型」
+     * 方塊實體的建議機器配方類型（registry id，空字串＝無）。多方塊部件先讀「可程式化配方類型」
      * 設定（{@link #programmedTypeOf}——輸入倉/總線等有設就用設定值，GTO 命名同款優先序），無設定才落到
-     * 控制器；控制器/單體機器回 {@link #joinTypes} 的**可用類型全集**——大型冶煉廠等多類型機器
-     *（冶煉＋合金冶煉）任一類型都算吻合，不再只看當下 active 類型。
+     * 控制器；控制器/單體機器回 {@link #machineTypeOf} 的**已決定類型**（多類型機器＝當下設定的模式）。
      */
     private static String suggestionOf(@Nullable BlockEntity be) {
         if (!(be instanceof MetaMachineBlockEntity mmbe)) {
@@ -741,7 +740,7 @@ public final class Network {
         } else if (mm instanceof IRecipeLogicMachine r) {
             rlm = r;
         }
-        return rlm == null ? "" : joinTypes(rlm);
+        return rlm == null ? "" : machineTypeOf(rlm);
     }
 
     /**
@@ -763,27 +762,35 @@ public final class Network {
     }
 
     /**
-     * 機器可用配方類型全集 → canonical 字串（依 id 排序去重、逗號串接）。排序讓同款機器不論當下 active
-     * 類型為何都得到同一字串——子網/tesseract 以字串去重判歧義，兩台同款不同檔位不能被誤判成兩機型。
-     * 濾掉 DUMMY／HATCH_COMBINED（GTO 命名同款過濾）；濾完為空退回單一 getRecipeType()。
+     * 機器「已決定」的配方類型（單一 id；空字串＝判不出）。多類型機器**模式一經設定就只跑該類型**
+     *（大型切割機＝切割或車床擇一），故多類型時取 {@code getRecipeType()}（當下設定的模式）——
+     * 1.18.0 曾回可用類型**全集**，會把另一模式的樣板誤匹配置頂（1.19.1 修）。
+     * 單一有效類型直接回它；DUMMY／HATCH_COMBINED 一律不算（GTO 命名同款過濾）。
      */
-    private static String joinTypes(IRecipeLogicMachine rlm) {
+    private static String machineTypeOf(IRecipeLogicMachine rlm) {
         try {
             GTRecipeType[] types = rlm.getAvailableRecipeTypes();
-            java.util.TreeSet<String> ids = new java.util.TreeSet<>();
-            if (types != null) {
-                for (GTRecipeType t : types) {
-                    if (t != null && t != com.gtocore.common.data.GTORecipeTypes.DUMMY_RECIPES
-                            && t != com.gtocore.common.data.GTORecipeTypes.HATCH_COMBINED) {
-                        ids.add(t.registryName.toString());
-                    }
+            if (types == null || types.length == 0) {
+                return ""; // GTO 命名同款守則：無可用類型不猜（getRecipeType 對空陣列會炸）
+            }
+            GTRecipeType chosen = null;
+            int real = 0;
+            for (GTRecipeType t : types) {
+                if (t != null && t != com.gtocore.common.data.GTORecipeTypes.DUMMY_RECIPES
+                        && t != com.gtocore.common.data.GTORecipeTypes.HATCH_COMBINED) {
+                    real++;
+                    chosen = t;
                 }
             }
-            if (ids.isEmpty()) {
-                GTRecipeType single = rlm.getRecipeType();
-                return single == null ? "" : single.registryName.toString();
+            if (real == 0) {
+                return "";
             }
-            return String.join(",", ids);
+            if (real > 1) {
+                GTRecipeType active = rlm.getRecipeType(); // 多類型：取當下設定的模式
+                chosen = (active != null && active != com.gtocore.common.data.GTORecipeTypes.DUMMY_RECIPES
+                        && active != com.gtocore.common.data.GTORecipeTypes.HATCH_COMBINED) ? active : null;
+            }
+            return chosen == null ? "" : chosen.registryName.toString();
         } catch (Throwable t) {
             return "";
         }
