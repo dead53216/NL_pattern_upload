@@ -114,13 +114,14 @@ final class UploadOverlay {
         Integer px = PatternUploadConfig.panelX();
         Integer py = PatternUploadConfig.panelY();
         if (px != null && py != null) {
-            this.x = Math.max(0, Math.min(px, screen.width - scaledW()));
+            this.x = Math.max(0, Math.min(px, screen.width - w));
             this.y = Math.max(0, Math.min(py, screen.height - 40));
         } else {
             defaultPosition();
         }
         // 搜尋欄併入標題列：icon（左，拖曳把手）＋搜尋欄（中）＋關閉鈕（右）；機器名以 hint 呈現。
-        this.searchBox = new EditBox(this.font, x + 21, y + 3, w - 34, 12, Component.empty());
+        // 寬度用內容邏輯寬（cw）：內容縮放時搜尋欄跟著框內邏輯版面走。
+        this.searchBox = new EditBox(this.font, x + 21, y + 3, cw() - 34, 12, Component.empty());
         this.searchBox.setMaxLength(64);
         this.searchBox.setBordered(false);
         this.searchBox.setHint(Component.translatable("pattern_upload.search"));
@@ -152,8 +153,8 @@ final class UploadOverlay {
             gx = screen.getGuiLeft() + screen.getXSize() + 4;
             gy = screen.getGuiTop() + 4;
         }
-        this.x = Math.max(0, Math.min(gx, screen.width - scaledW()));
-        this.y = Math.max(2, Math.min(gy, screen.height - Math.round(heightFor(maxRows) * uiScale) - 2));
+        this.x = Math.max(0, Math.min(gx, screen.width - w));
+        this.y = Math.max(2, Math.min(gy, screen.height - heightFor(maxRows) - 2));
     }
 
     private static int orDefault(Integer v, int def) {
@@ -165,18 +166,30 @@ final class UploadOverlay {
     }
 
     // ------------------------------------------------------------- 縮放座標
+    // 外框（x/y/w/panelHeight）固定為螢幕座標；縮放只作用框內內容——
+    // 內容邏輯寬高 = 實寬高 ÷ uiScale（縮小＝同框塞更多列與更多字）。
 
-    /** 面板在螢幕上的實際寬（邏輯寬 × 縮放）。 */
-    private int scaledW() {
-        return Math.round(w * uiScale);
+    /** 內容邏輯寬（實寬 ÷ 縮放）。 */
+    private int cw() {
+        return Math.max(40, Math.round(w / uiScale));
     }
 
-    /** 螢幕滑鼠 X → 面板邏輯座標（以面板左上角 (x,y) 為縮放錨點）。 */
+    /** 內容邏輯高（實高 ÷ 縮放）。 */
+    private int contentH() {
+        return Math.round(panelHeight() / uiScale);
+    }
+
+    /** 內容區可容納的列數（邏輯高扣掉標題列與底部狀態列）。 */
+    private int contentRows() {
+        return Math.max(1, (contentH() - HEADER_H - 2 - FOOTER_H) / ROW_H);
+    }
+
+    /** 螢幕滑鼠 X → 內容邏輯座標（以面板左上角 (x,y) 為縮放錨點）。 */
     private double lx(double mx) {
         return x + (mx - x) / uiScale;
     }
 
-    /** 螢幕滑鼠 Y → 面板邏輯座標。 */
+    /** 螢幕滑鼠 Y → 內容邏輯座標。 */
     private double ly(double my) {
         return y + (my - y) / uiScale;
     }
@@ -299,7 +312,7 @@ final class UploadOverlay {
                 rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, "", null, false, false));
             }
         }
-        scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - maxRows));
+        scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - contentRows()));
     }
 
     /** 額外資訊列 icon：群組 icon 物品 id → ItemStack；解析不到退樣板 icon。 */
@@ -376,7 +389,7 @@ final class UploadOverlay {
     }
 
     private int visibleRows() {
-        return Math.min(rows.size(), maxRows);
+        return Math.min(rows.size(), contentRows());
     }
 
     private int rowsTop() {
@@ -425,38 +438,40 @@ final class UploadOverlay {
     // ---------------------------------------------------------------- render
 
     void render(GuiGraphics g, int rawMouseX, int rawMouseY, float partialTick) {
-        // 整面板（含字體）以 (x,y) 為錨點縮放；滑鼠先轉邏輯座標，後續 hover/tooltip 沿用邏輯座標
-        //（tooltip 傳邏輯座標、經縮放 pose 映回螢幕原位，位置不偏）。
+        int h = panelHeight();
+
+        // 外框固定不隨內容縮放：底色、邊框、右下角縮放把手都畫在實際框上（hover 用螢幕座標判）
+        g.fill(x, y, x + w, y + h, 0xF0141414);
+        g.renderOutline(x, y, w, h, 0xFF8B8B8B);
+        int gripColor = isOverResizeGrip(rawMouseX, rawMouseY) || resizing ? 0xFFFFFFFF : 0xFF9B9B9B;
+        g.fill(x + w - 8, y + h - 2, x + w - 1, y + h - 1, gripColor);
+        g.fill(x + w - 2, y + h - 8, x + w - 1, y + h - 1, gripColor);
+
+        // 內容縮放（Ctrl+滾輪）：框不動、框內以 (x,y) 為錨縮放；內容邏輯寬高＝實寬高 ÷ 縮放
+        //（縮小＝同框塞更多列與更多字）。滑鼠轉邏輯座標，hover/tooltip 沿用（tooltip 經縮放 pose 映回原位）。
         int mouseX = (int) lx(rawMouseX);
         int mouseY = (int) ly(rawMouseY);
+        int cw = cw();
+        int ch = contentH();
         var pose = g.pose();
         pose.pushPose();
         pose.translate(x, y, 0);
         pose.scale(uiScale, uiScale, 1);
         pose.translate(-x, -y, 0);
-        int h = panelHeight();
-
-        g.fill(x, y, x + w, y + h, 0xF0141414);
-        g.renderOutline(x, y, w, h, 0xFF8B8B8B);
-
-        // 右下角縮放把手（⌟ 形記號）
-        int gripColor = isOverResizeGrip(mouseX, mouseY) || resizing ? 0xFFFFFFFF : 0xFF9B9B9B;
-        g.fill(x + w - 8, y + h - 2, x + w - 1, y + h - 1, gripColor);
-        g.fill(x + w - 2, y + h - 8, x + w - 1, y + h - 1, gripColor);
 
         // header：樣板機器 icon（左，拖曳把手）+ 搜尋欄／機器名（中）+ 關閉鈕（右）
         g.renderItem(headerIcon(), x + 2, y + 1);
-        g.fill(x + 20, y + 2, x + w - 12, y + HEADER_H - 2, 0x40000000); // 搜尋欄底色
+        g.fill(x + 20, y + 2, x + cw - 12, y + HEADER_H - 2, 0x40000000); // 搜尋欄底色
         if (searchBox.isFocused() || !searchBox.getValue().isEmpty()) {
             // 聚焦或有輸入 → 顯示可編輯搜尋欄
             searchBox.render(g, mouseX, mouseY, partialTick);
         } else {
             // 未搜尋 → 該列當標題，亮白顯示機器名／模式標題（點一下即變搜尋欄）
-            String t = font.plainSubstrByWidth(headerTitle().getString(), w - 21 - 13);
+            String t = font.plainSubstrByWidth(headerTitle().getString(), cw - 21 - 13);
             g.drawString(font, t, x + 21, y + 5, 0xFFFFFF);
         }
         boolean closeHover = isOverClose(mouseX, mouseY);
-        g.drawString(font, "✕", x + w - 10, y + 5, closeHover ? 0xFF5555 : 0xAAAAAA);
+        g.drawString(font, "✕", x + cw - 10, y + 5, closeHover ? 0xFF5555 : 0xAAAAAA);
 
         // rows
         int top = rowsTop();
@@ -468,19 +483,19 @@ final class UploadOverlay {
             }
             Row row = rows.get(idx);
             int ry = top + i * ROW_H;
-            boolean hover = mouseX >= x + 2 && mouseX < x + w - 2 && mouseY >= ry && mouseY < ry + ROW_H;
+            boolean hover = mouseX >= x + 2 && mouseX < x + cw - 2 && mouseY >= ry && mouseY < ry + ROW_H;
             boolean iconHover = mode == Mode.DESTINATIONS && !craftMode() && row.destIndex() != EXTRA_ROW
                     && isOverRowIcon(mouseX, mouseY, ry);
             if (hover && !(mode == Mode.DESTINATIONS && row.blocked() && !iconHover)) {
-                g.fill(x + 2, ry, x + w - 2, ry + ROW_H, 0x40FFFFFF);
+                g.fill(x + 2, ry, x + cw - 2, ry + ROW_H, 0x40FFFFFF);
             }
             if (iconHover) {
                 g.fill(x + 2, ry, x + 20, ry + ROW_H, 0x60FFFFFF);
             }
             if (mode == Mode.DESTINATIONS && selected.contains(row.destIndex())) {
                 // 中鍵多選高亮
-                g.fill(x + 2, ry, x + w - 2, ry + ROW_H, 0x5044DD44);
-                g.renderOutline(x + 2, ry, w - 4, ROW_H, 0xFF55EE55);
+                g.fill(x + 2, ry, x + cw - 2, ry + ROW_H, 0x5044DD44);
+                g.renderOutline(x + 2, ry, cw - 4, ROW_H, 0xFF55EE55);
             }
             if (row.key() != null) {
                 AEKeyRendering.drawInGui(Minecraft.getInstance(), g, x + 3, ry, row.key());
@@ -508,11 +523,11 @@ final class UploadOverlay {
                 }
                 if (tail != null) {
                     int fw = font.width(tail);
-                    g.drawString(font, tail, x + w - 5 - fw, ry + 5, tailColor);
+                    g.drawString(font, tail, x + cw - 5 - fw, ry + 5, tailColor);
                     freeW = fw + 4;
                 }
             }
-            int nameW = w - 25 - freeW;
+            int nameW = cw - 25 - freeW;
             if (mode == Mode.DESTINATIONS && row.type() != null && !row.providerName().isEmpty()) {
                 // 已判定機器：第一行機器名，第二行括號放（改名後的）原標籤；「通用工廠 - 子機器」只留子機器。
                 // 機器名顏色：手動指定＝白；伺服端建議（接口→存儲總線自動解析）＝青色標示，可分辨並提醒可手動覆寫。
@@ -535,11 +550,11 @@ final class UploadOverlay {
         if (rows.isEmpty()) {
             g.drawString(font, Component.translatable("pattern_upload.empty").getString(), x + 6, top + 4, 0x888888);
         }
-        int bottomY = y + h - 11;
-        int hintRight = x + w - 5; // 底列提示可用的右界（有捲動指示時往左讓位，避免文字重疊）
-        if (rows.size() > maxRows) {
-            String pos = (scrollOff + 1) + "-" + Math.min(scrollOff + maxRows, rows.size()) + "/" + rows.size();
-            int posX = x + w - 12 - font.width(pos);
+        int bottomY = y + ch - 11;
+        int hintRight = x + cw - 5; // 底列提示可用的右界（有捲動指示時往左讓位，避免文字重疊）
+        if (rows.size() > contentRows()) {
+            String pos = (scrollOff + 1) + "-" + Math.min(scrollOff + contentRows(), rows.size()) + "/" + rows.size();
+            int posX = x + cw - 12 - font.width(pos);
             g.drawString(font, pos, posX, bottomY, 0x888888);
             hintRight = posX - 4;
         }
@@ -553,8 +568,8 @@ final class UploadOverlay {
         if (mode == Mode.MACHINE_SELECT && selectingDup) {
             // 同名供應器共用指定（客戶端只拿得到名稱，分不出實體）——提醒玩家先改名
             String warn = font.plainSubstrByWidth(
-                    Component.translatable("pattern_upload.dup.warn").getString(), w - 10);
-            g.drawString(font, warn, x + 5, y + h - 11, 0xFFCC44);
+                    Component.translatable("pattern_upload.dup.warn").getString(), cw - 10);
+            g.drawString(font, warn, x + 5, y + ch - 11, 0xFFCC44);
         }
 
         // tooltips
@@ -577,11 +592,12 @@ final class UploadOverlay {
     // ----------------------------------------------------------------- input
 
     private boolean isInside(double mx, double my) {
-        return mx >= x && mx < x + w && my >= y && my < y + panelHeight();
+        // 邏輯座標；內容邏輯寬高與外框等價（同一矩形除以縮放），框內判定一致
+        return mx >= x && mx < x + cw() && my >= y && my < y + contentH();
     }
 
     private boolean isOverClose(double mx, double my) {
-        return mx >= x + w - 13 && mx < x + w - 1 && my >= y + 2 && my < y + 15;
+        return mx >= x + cw() - 13 && mx < x + cw() - 1 && my >= y + 2 && my < y + 15;
     }
 
     /** 右下角 12x12 = 縮放把手。 */
@@ -602,11 +618,11 @@ final class UploadOverlay {
 
     boolean mouseDragged(double mx, double my, int button, double dragX, double dragY) {
         if (resizing) {
-            // 以左上角為錨點，拖右下角改寬與列數（邏輯座標：縮放後拖曳手感 1:1 對映視覺大小）
-            w = clamp((int) lx(mx) - x, MIN_W, MAX_W);
-            int targetH = (int) ly(my) - y;
+            // 以左上角為錨點，拖右下角改「外框」寬與列數（螢幕座標——外框不受內容縮放影響）
+            w = clamp((int) mx - x, MIN_W, MAX_W);
+            int targetH = (int) my - y;
             maxRows = clamp(Math.round((targetH - HEADER_H - 2 - FOOTER_H) / (float) ROW_H), MIN_ROWS, MAX_ROWS_LIMIT);
-            searchBox.setWidth(w - 34);
+            searchBox.setWidth(cw() - 34);
             rebuildRows();
             return true;
         }
@@ -614,7 +630,7 @@ final class UploadOverlay {
             return false;
         }
         // 拖曳移動用螢幕座標（面板錨點 (x,y) 本來就是螢幕座標，1:1 跟手）
-        x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - scaledW()));
+        x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - w));
         y = Math.max(0, Math.min((int) my - dragOffY, screen.height - 40));
         searchBox.setX(x + 21);
         searchBox.setY(y + 3);
@@ -632,7 +648,7 @@ final class UploadOverlay {
     }
 
     private int rowIndexAt(double mx, double my) {
-        if (mx < x + 2 || mx >= x + w - 2) {
+        if (mx < x + 2 || mx >= x + cw() - 2) {
             return -1;
         }
         int top = rowsTop();
@@ -671,7 +687,7 @@ final class UploadOverlay {
             return true; // 面板內右鍵一律吃掉，避免誤觸終端
         }
 
-        if (isOverResizeGrip(mx, my)) {
+        if (isOverResizeGrip(rawMx, rawMy)) { // 縮放把手在外框角落（螢幕座標，不受內容縮放影響）
             resizing = true;
             return true;
         }
@@ -798,14 +814,16 @@ final class UploadOverlay {
         if (!isInside(lx(mx), ly(my))) {
             return false;
         }
-        // Ctrl+滾輪：調整面板整體縮放（0.5–2.0，一格 0.1；含字體），即時生效並落盤
+        // Ctrl+滾輪：調整框內內容縮放（0.5–2.0，一格 0.1；外框不動），即時生效並落盤
         if (net.minecraft.client.gui.screens.Screen.hasControlDown()) {
             float next = uiScale + 0.1f * Math.signum((float) delta);
             uiScale = Math.round(Math.max(MIN_SCALE, Math.min(MAX_SCALE, next)) * 10f) / 10f;
+            searchBox.setWidth(cw() - 34);
+            scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - contentRows()));
             PatternUploadConfig.saveScale(uiScale);
             return true;
         }
-        scrollOff = Math.max(0, Math.min(scrollOff - (int) Math.signum(delta), rows.size() - maxRows));
+        scrollOff = Math.max(0, Math.min(scrollOff - (int) Math.signum(delta), rows.size() - contentRows()));
         return true;
     }
 
