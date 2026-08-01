@@ -290,6 +290,8 @@ public final class PatternUploadClient {
     private static String crtKey;
     @Nullable
     private static GTRecipeType crtVal;
+    /** 本次樣板配方的電壓 tier（GTRecipeDefinition.tier，產物匹配定義取最小值）；-1＝未知（proxy 路徑等）。 */
+    private static int crtTier = -1;
 
     @Nullable
     static GTRecipeType currentRecipeType(AbstractContainerMenu menu) {
@@ -302,16 +304,60 @@ public final class PatternUploadClient {
         if (menu == crtMenu && key.equals(crtKey)) {
             return crtVal;
         }
-        GTRecipeType result = (recipe != null && !recipe.isEmpty())
-                ? computeCurrentRecipeType(menu, recipe) : null;
+        GTRecipeType result = null;
+        int tier = -1;
+        if (recipe != null && !recipe.isEmpty()) {
+            ResourceLocation typeRl = ResourceLocation.tryParse(recipe.split("/")[0]);
+            GTRecipeType type = typeRl == null ? null : GTRegistries.RECIPE_TYPES.get(typeRl);
+            if (type != null) {
+                Integer t = matchingRecipeMinTier(menu, type);
+                if (t != null) {
+                    result = type;
+                    tier = t;
+                }
+            }
+        }
         if (result == null) {
-            // gtocore$recipe 空（原版燒煉等 proxy 配方）或殘留對不上，反查 proxy 機器
+            // gtocore$recipe 空（原版燒煉等 proxy 配方）或殘留對不上，反查 proxy 機器（電壓未知）
             result = proxyRecipeTypeFor(menu);
         }
         crtMenu = menu;
         crtKey = key;
         crtVal = result;
+        crtTier = tier;
         return result;
+    }
+
+    /** 本次樣板配方的電壓 tier；-1＝未知。呼叫前確保 {@link #currentRecipeType} 同一 menu 已算過（共用快取）。 */
+    static int currentRecipeTier(AbstractContainerMenu menu) {
+        currentRecipeType(menu);
+        return crtTier;
+    }
+
+    /** 電壓等級名（GTValues.VN 如 "LV"）→ tier index；空／對不上回 -1。 */
+    static int tierIndexOf(String vn) {
+        if (vn == null || vn.isEmpty()) {
+            return -1;
+        }
+        String[] arr = com.gregtechceu.gtceu.api.GTValues.VN;
+        for (int i = 0; i < arr.length; i++) {
+            if (arr[i].equals(vn)) {
+                return i;
+            }
+        }
+        return "MAX".equals(vn) ? arr.length : -1;
+    }
+
+    /**
+     * 該目的地機器電壓是否跑得動本次配方：配方 tier 未知／機器 tier 未知 → 寬容放行（維持舊行為）；
+     * 皆已知 → 機器 tier ≥ 配方 tier 才可（GT 低壓機器跑不了高壓配方；高壓可跑低壓配方＝超頻）。
+     */
+    static boolean voltageOk(int index, int recipeTier) {
+        if (recipeTier < 0) {
+            return true;
+        }
+        int mt = tierIndexOf(tierFor(index));
+        return mt < 0 || mt >= recipeTier;
     }
 
     /** 讀 GTOCore @GuiSync 欄位 gtocore$recipe（反射 Field 快取）；欄位不存在即永久停用，取值失敗則下次重抓。 */
@@ -352,19 +398,6 @@ public final class PatternUploadClient {
             sb.append(k == null ? 0 : k.hashCode()).append(';');
         }
         return sb.toString();
-    }
-
-    @Nullable
-    private static GTRecipeType computeCurrentRecipeType(AbstractContainerMenu menu, String recipe) {
-        ResourceLocation typeRl = ResourceLocation.tryParse(recipe.split("/")[0]);
-        if (typeRl == null) {
-            return null;
-        }
-        GTRecipeType type = GTRegistries.RECIPE_TYPES.get(typeRl);
-        if (type == null) {
-            return null;
-        }
-        return typeProducesPatternOutput(menu, type) ? type : null;
     }
 
     /**
@@ -428,17 +461,21 @@ public final class PatternUploadClient {
     }
 
     /**
-     * 判定 type 這台機器是否真能做出「編碼格的主產物」——防 gtocore$recipe 殘留。
+     * 判定 type 這台機器是否真能做出「編碼格的主產物」並回**匹配定義的最小電壓 tier**——防 gtocore$recipe 殘留。
      * <p>
      * gtocore$recipe 只在載入既有樣板時更新，殘留的可能是**別的機器**（壓印器樣板殘留成液化機）
      * 或**同機器別條配方**（組裝機樣板殘留成 disassembly），故不比對精確 recipe id，
      * 改看「該類型的<b>任一</b>配方」是否產出此樣板產物。gtceu 配方不在原版 client RecipeManager，
      * 查 {@code GTRecipeType.recipes}（gtceu 同步到 client 的表）。
+     * <p>
+     * 回傳：null＝無配方匹配（非該機器／殘留）；否則所有匹配定義中最小的 {@code GTRecipeDefinition.tier}
+     *（同產物多條配方取最寬容值；電壓排序／自動直傳的電壓檢查用）。
      */
-    private static boolean typeProducesPatternOutput(AbstractContainerMenu menu, GTRecipeType type) {
+    @Nullable
+    private static Integer matchingRecipeMinTier(AbstractContainerMenu menu, GTRecipeType type) {
         try {
             if (!(menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm)) {
-                return false;
+                return null;
             }
             // 收集編碼格所有非空產出物的 AEKey（物品或流體）。
             // 流體產物在 FakeSlot 是包成 wrapper item，用公開 API GenericStack.unwrapItemStack 解出
@@ -453,29 +490,39 @@ public final class PatternUploadClient {
                 keys.add(gs != null ? gs.what() : appeng.api.stacks.AEItemKey.of(st));
             }
             if (keys.isEmpty()) {
-                return false;
+                return null;
             }
-            // 該類型任一配方的 item/fluid Outputs 命中任一產出物即算匹配
+            // 該類型任一配方的 item/fluid Outputs 命中任一產出物即算匹配；收所有匹配定義的最小 tier
+            Integer best = null;
             for (var def : type.recipes.values()) {
+                boolean hit = false;
                 for (var key : keys) {
                     if (key instanceof appeng.api.stacks.AEItemKey ik) {
                         for (var content : def.itemOutputs) {
                             if (content.inner.testAeKay(ik)) {
-                                return true;
+                                hit = true;
+                                break;
                             }
                         }
                     } else if (key instanceof appeng.api.stacks.AEFluidKey fk) {
                         for (var content : def.fluidOutputs) {
                             if (content.inner.testAeKay(fk)) {
-                                return true;
+                                hit = true;
+                                break;
                             }
                         }
                     }
+                    if (hit) {
+                        break;
+                    }
+                }
+                if (hit && (best == null || def.tier < best)) {
+                    best = def.tier;
                 }
             }
-            return false;
+            return best;
         } catch (Throwable t) {
-            return false; // 任何 API 異動/查不到 → 保守視為不匹配（改開面板讓玩家自選）
+            return null; // 任何 API 異動/查不到 → 保守視為不匹配（改開面板讓玩家自選）
         }
     }
 
@@ -601,10 +648,12 @@ public final class PatternUploadClient {
         }
         GTRecipeType current = force ? null : currentRecipeType(screen.getMenu());
         if (current != null) {
+            int recipeTier = currentRecipeTier(screen.getMenu());
             List<ListBoxReflector.Dest> matches = new java.util.ArrayList<>();
             for (var d : dests) {
                 int tier = UploadOverlay.sortTier(d, current);
-                if (tier == 0 || tier == 1) {
+                // 電壓不足（機器 tier < 配方 tier）不算明確匹配：不自動直傳到跑不動的機器（未知電壓寬容放行）
+                if ((tier == 0 || tier == 1) && voltageOk(d.index(), recipeTier)) {
                     matches.add(d);
                 }
             }
@@ -750,6 +799,7 @@ public final class PatternUploadClient {
             crtMenu = null;
             crtKey = null;
             crtVal = null;
+            crtTier = -1;
         }
     }
 
