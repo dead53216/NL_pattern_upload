@@ -334,7 +334,8 @@ final class UploadOverlay {
     /**
      * 目的地排序層級（越小越前），0/1 視為「明確匹配」可自動上傳：
      * -1 已有該配方（**置頂**展示——上傳會被 GTO 忽略，行為視同滿槽、也不算進自動直傳明確匹配）；
-     * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型；3 無法判定；4 手動指定但不吻合；5 滿槽。
+     * 0 手動指定且吻合；1 icon 反查機器 或 名稱最長機器名 支援本類型（多類型機器有伺服端「已決定類型」
+     * 時以它為準）；3 無法判定；4 手動指定但不吻合／多類型機器已決定其他模式；5 滿槽。
      */
     static int sortTier(ListBoxReflector.Dest d, GTRecipeType current) {
         // 有效機器＝手動指定優先，無則「可採用」的伺服端建議（多類型優先挑吻合 current 者）；
@@ -355,6 +356,21 @@ final class UploadOverlay {
         }
         var iconTypes = RecipeTypeIcons.typesForIcon(d.icon());
         if (iconTypes != null) {
+            // 多類型機器（大型切割機＝切割＋車床）：icon 全類型集會把「另一模式」的機器也判吻合 →
+            // 車床樣板連切割模式那台都算 match、永遠開面板。伺服端 1.19.1 起回報「已決定類型」
+            //（當下設定的模式）——有回報就以它判定：吻合 → 1；已決定其他模式 → 4（該台跑不了這張樣板，
+            // 不算明確匹配、也不誤置頂）。沒回報（舊伺服端／逾時）→ 退回 icon 全集判定（舊行為）。
+            if (iconTypes.size() > 1) {
+                var decided = PatternUploadClient.suggestionsFor(d.index());
+                if (!decided.isEmpty()) {
+                    for (GTRecipeType t : decided) {
+                        if (RecipeTypeIcons.matchesType(t, current)) {
+                            return 1;
+                        }
+                    }
+                    return 4;
+                }
+            }
             for (GTRecipeType t : iconTypes) {
                 if (RecipeTypeIcons.matchesType(t, current)) {
                     return 1;
