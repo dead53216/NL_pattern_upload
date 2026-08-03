@@ -218,20 +218,26 @@ final class UploadOverlay {
             GTRecipeType current = craft ? null : PatternUploadClient.currentRecipeType(screen.getMenu());
             // 置頂資訊列：已有該配方但被 GTO 從清單移除的供應器（伺服端整網枚舉補回）。
             // 純展示（blocked）：讓玩家一眼看到「這張樣板已經在哪」，避免重複鋪到別台。
-            for (var ex : PatternUploadClient.extraDests()) {
+            var exList = PatternUploadClient.extraDests();
+            for (int ei = 0; ei < exList.size(); ei++) {
+                var ex = exList.get(ei);
                 GTRecipeType sugType = PatternUploadClient.pickSuggestion(
                         PatternUploadClient.parseSuggestions(ex.suggest()), current);
+                // 實際機器優先（化工廠不顯示成同類型的大型化學反應釜）；未回報退類型代表機器
+                ItemStack actual = PatternUploadClient.machineItemStack(PatternUploadClient.extraMachineFor(ei));
                 String label = ex.name();
-                Component display = sugType != null
-                        ? Component.literal(RecipeTypeIcons.name(sugType).getString())
+                Component display = actual != null ? Component.literal(actual.getHoverName().getString())
+                        : sugType != null ? Component.literal(RecipeTypeIcons.name(sugType).getString())
                         : Component.literal(label);
-                String filterText = sugType != null ? display.getString() + " (" + label + ")" : label;
+                boolean machineKnown = actual != null || sugType != null;
+                String filterText = machineKnown ? display.getString() + " (" + label + ")" : label;
                 if (!PinyinMatch.matches(filterText, filter)) {
                     continue;
                 }
-                ItemStack icon = sugType != null ? RecipeTypeIcons.icon(sugType) : iconFromId(ex.iconId());
+                ItemStack icon = actual != null ? actual
+                        : sugType != null ? RecipeTypeIcons.icon(sugType) : iconFromId(ex.iconId());
                 rows.add(new Row(icon, null, display, false, EXTRA_ROW, sugType,
-                        sugType != null ? label : "", null, sugType != null, true));
+                        machineKnown ? label : "", null, machineKnown, true));
             }
             // 單趟預算：每 dest 只算一次 posKey/manual/suggestion/effective/tier/free，
             // 避免 comparator（sortTier）每次比較與 isSuggested 各自重呼 machineFor/suggestionFor。
@@ -279,9 +285,16 @@ final class UploadOverlay {
                 // 搜尋鍵一律含伺服端回的電壓等級（"LV" 等）——GTO 標籤有無帶電壓都搜得到（1.20.0）
                 String tier = PatternUploadClient.tierFor(dest.index());
                 String filterText = providerName + (tier.isEmpty() ? "" : " " + tier);
+                // 建議路徑的實際機器（伺服端回報）：同類型異機種（化工廠 vs 大型化學反應釜）不再顯示成
+                // 類型代表機器；未回報（舊伺服端／混綁不唯一）退類型代表機器。手動指定者尊重玩家選的類型顯示。
+                ItemStack actual = p.suggested()
+                        ? PatternUploadClient.machineItemStack(PatternUploadClient.machineItemFor(dest.index()))
+                        : null;
                 if (assigned != null) {
                     // 已判定機器：icon 換成該機器；第一行放「機器名＋電壓」，原標籤（改名後的自訂名）換行放括號裡（見 render）。
-                    String machineName = RecipeTypeIcons.name(assigned).getString()
+                    String machineName = (actual != null
+                            ? actual.getHoverName().getString()
+                            : RecipeTypeIcons.name(assigned).getString())
                             + (tier.isEmpty() ? "" : " " + tier);
                     display = Component.literal(machineName);
                     filterText = machineName + " (" + providerName + ")";
@@ -291,8 +304,8 @@ final class UploadOverlay {
                 }
                 boolean hasRecipe = PatternUploadClient.hasRecipeFor(dest.index());
                 if (assigned != null) {
-                    rows.add(new Row(RecipeTypeIcons.icon(assigned), null, display, dest.full(), dest.index(), assigned,
-                            providerName, p.posKey(), p.suggested(), hasRecipe));
+                    rows.add(new Row(actual != null ? actual : RecipeTypeIcons.icon(assigned), null, display,
+                            dest.full(), dest.index(), assigned, providerName, p.posKey(), p.suggested(), hasRecipe));
                 } else {
                     rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName,
                             p.posKey(), false, hasRecipe));

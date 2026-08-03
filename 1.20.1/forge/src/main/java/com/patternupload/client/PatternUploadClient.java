@@ -65,6 +65,12 @@ public final class PatternUploadClient {
     /** 已有該配方但被 GTO 從清單移除的供應器（伺服端整網枚舉補回；面板置頂當資訊列）。 */
     @Nullable
     private static java.util.List<Network.ReplyS2C.Extra> posExtras = null;
+    /** 建議路徑解析到的實際機器物品 id（照 index 對齊；空＝未知，顯示退類型代表機器）。 */
+    @Nullable
+    private static String[] posSugMachine = null;
+    /** extras 的實際機器物品 id（照 extras 順序）。 */
+    @Nullable
+    private static String[] posExtraMachine = null;
     /** 各目的地建議機器的電壓等級名（GTValues.VN 如 "LV"，照 index 對齊；空字串＝未知）。 */
     @Nullable
     private static String[] posTier = null;
@@ -104,6 +110,8 @@ public final class PatternUploadClient {
         posHasRecipe = null;
         posExtras = null;
         posTier = null;
+        posSugMachine = null;
+        posExtraMachine = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -124,6 +132,8 @@ public final class PatternUploadClient {
         posHasRecipe = msg.hasRecipe();
         posExtras = msg.extras();
         posTier = msg.tier();
+        posSugMachine = msg.sugMachine();
+        posExtraMachine = msg.extraMachine();
         LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
         if (pendingDests != null) {
             decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板
@@ -156,6 +166,24 @@ public final class PatternUploadClient {
             return java.util.List.of();
         }
         return parseSuggestions(sug[index]);
+    }
+
+    /** 機器物品 id → ItemStack；空／解析不到回 null（呼叫端退類型代表機器）。 */
+    @Nullable
+    static net.minecraft.world.item.ItemStack machineItemStack(String id) {
+        try {
+            if (id == null || id.isEmpty()) {
+                return null;
+            }
+            ResourceLocation rl = ResourceLocation.tryParse(id);
+            if (rl == null) {
+                return null;
+            }
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(rl);
+            return item == net.minecraft.world.item.Items.AIR ? null : new net.minecraft.world.item.ItemStack(item);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /** 建議欄位字串（可含逗號多類型）→ 類型清單；解析不到者濾掉，空回空表。 */
@@ -217,6 +245,18 @@ public final class PatternUploadClient {
         return e == null ? java.util.List.of() : e;
     }
 
+    /** 第 index 個目的地建議路徑的實際機器物品 id；未知回 ""（顯示退類型代表機器）。 */
+    static String machineItemFor(int index) {
+        String[] m = posSugMachine;
+        return (m == null || index < 0 || index >= m.length || m[index] == null) ? "" : m[index];
+    }
+
+    /** 第 i 個 extras 的實際機器物品 id；未知回 ""。 */
+    static String extraMachineFor(int i) {
+        String[] m = posExtraMachine;
+        return (m == null || i < 0 || i >= m.length || m[i] == null) ? "" : m[i];
+    }
+
     /**
      * 該目的地「可採用」的伺服端建議：GTOCore 標籤的 icon 已可反查機器（未改名的直接貼機器等）→ 回 null，
      * 沿用既有 icon/名稱判定路徑（顯示與排序零變動）；icon 反查不到（接口類、或供應器**被改名**後
@@ -250,7 +290,10 @@ public final class PatternUploadClient {
     static net.minecraft.network.chat.Component sentDisplayName(ListBoxReflector.Dest d, @Nullable GTRecipeType machine) {
         String label = d.name().getString();
         String machineName = null;
-        if (machine != null) {
+        var actual = machineItemStack(machineItemFor(d.index()));
+        if (actual != null) {
+            machineName = actual.getHoverName().getString(); // 伺服端回報的實際機器（化工廠≠同類型代表機器）
+        } else if (machine != null) {
             machineName = RecipeTypeIcons.name(machine).getString();
         } else if (d.icon() != null && RecipeTypeIcons.isCraftContainer(d.icon())) {
             machineName = d.icon().getDisplayName().getString();
@@ -798,6 +841,8 @@ public final class PatternUploadClient {
             posHasRecipe = null;
             posExtras = null;
             posTier = null;
+            posSugMachine = null;
+            posExtraMachine = null;
             // 清 currentRecipeType 快取（不長抓已關終端的 menu 參照）
             crtMenu = null;
             crtKey = null;

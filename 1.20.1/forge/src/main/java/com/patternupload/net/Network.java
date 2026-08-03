@@ -138,13 +138,19 @@ public final class Network {
      * {@code tier[i]} 為建議機器的電壓等級名（{@code GTValues.VN}，如 "LV"；空字串＝未知）：
      * 與建議同路解析（直貼／tesseract 綁定唯一電壓／子網唯一機器），供面板顯示與搜尋。
      * <p>
-     * {@code free}（1.15.0）、{@code hasRecipe}（1.16.0）、{@code extras}（1.17.0）、{@code tier}（1.20.0）
-     * 是**尾綴欄位**（協定號不變）：encode 依序寫在原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——
-     * 舊伺服端沒寫 → 該段取預設（-1／false／空表／""）；舊客戶端不讀 → 剩餘 bytes 被丟棄無害。
-     * 兩側版本不齊皆退預設值，不斷線、不炸包。
+     * {@code sugMachine[i]} 為建議路徑解析到的**實際機器物品 id**（唯一機器/機種才回報；空＝退類型代表機器）：
+     * 建議只帶配方類型時客戶端顯示會退「類型代表機器」——化工廠經超立方判定會被顯示成同類型的
+     * 大型化學反應釜，附實際機器物品即顯示真機器。{@code extraMachine} 為 extras 的同款資訊（照 extras 順序）。
+     * <p>
+     * {@code free}（1.15.0）、{@code hasRecipe}（1.16.0）、{@code extras}（1.17.0）、{@code tier}（1.20.0）、
+     * {@code sugMachine}/{@code extraMachine}（1.25.0）是**尾綴欄位**（協定號不變）：encode 依序寫在
+     * 原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——舊伺服端沒寫 → 該段取預設（-1／false／空表／""）；
+     * 舊客戶端不讀 → 剩餘 bytes 被丟棄無害。兩側版本不齊皆退預設值，不斷線、不炸包。
+     * **既有段的每筆格式永不可改**（只能在最後追加新段），否則舊客戶端解流會錯位。
      */
     public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest, int[] free,
-                           boolean[] hasRecipe, List<Extra> extras, String[] tier) {
+                           boolean[] hasRecipe, List<Extra> extras, String[] tier, String[] sugMachine,
+                           String[] extraMachine) {
 
         /** 被 GTO 藏掉的「已有該配方」供應器：GTOCore 群組標籤名、群組 icon 物品 id、建議機器、剩餘格。 */
         public record Extra(String name, String iconId, String suggest, int free) {}
@@ -176,6 +182,12 @@ public final class Network {
             }
             for (int i = 0; i < m.packed.length; i++) {
                 b.writeUtf(m.tier[i] == null ? "" : m.tier[i]);
+            }
+            for (int i = 0; i < m.packed.length; i++) {
+                b.writeUtf(m.sugMachine[i] == null ? "" : m.sugMachine[i]);
+            }
+            for (int i = 0; i < m.extras.size(); i++) {
+                b.writeUtf(i < m.extraMachine.length && m.extraMachine[i] != null ? m.extraMachine[i] : "");
             }
         }
 
@@ -220,7 +232,21 @@ public final class Network {
                     tier[i] = b.readUtf();
                 }
             }
-            return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe, extras, tier);
+            String[] sugMachine = new String[n];
+            java.util.Arrays.fill(sugMachine, "");
+            if (b.isReadable()) {
+                for (int i = 0; i < n; i++) {
+                    sugMachine[i] = b.readUtf();
+                }
+            }
+            String[] extraMachine = new String[extras.size()];
+            java.util.Arrays.fill(extraMachine, "");
+            if (b.isReadable()) {
+                for (int i = 0; i < extraMachine.length; i++) {
+                    extraMachine[i] = b.readUtf();
+                }
+            }
+            return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe, extras, tier, sugMachine, extraMachine);
         }
     }
 
@@ -249,6 +275,7 @@ public final class Network {
             ResourceLocation[] dims = new ResourceLocation[n];
             String[] suggest = new String[n];
             String[] tier = new String[n];
+            String[] sugMachine = new String[n];
             int[] free = new int[n];
             boolean[] hasRecipe = new boolean[n];
             // 本次編碼樣板的主產物（GTO 上傳去重同款判定：mixin 暫存 gto$patternStack → decode → primaryOutput）
@@ -260,6 +287,7 @@ public final class Network {
                 Object o = containers.get(i);
                 suggest[i] = "";
                 tier[i] = "";
+                sugMachine[i] = "";
                 free[i] = -1;
                 if (o instanceof IExtendedPatternContainer.IPPPC ippc) {
                     Level level = ippc.gto$getLevel();
@@ -271,17 +299,21 @@ public final class Network {
                     String[] r = resolveSuggested(ippc, gridCache);
                     suggest[i] = r[0];
                     tier[i] = r[1];
+                    sugMachine[i] = r[2];
                     free[i] = countFreePatternSlots(ippc);
                     hasRecipe[i] = primaryOut != null && containsPrimaryOutput(ippc, primaryOut, player.level());
                 }
             }
             // GTO 建清單時把「已有該配方」的供應器整列移除（removeIf canAddPattern && containsPrimaryOutput）
             // → 客戶端清單沒有它們。這裡照 GTO 同款枚舉整網補回，客戶端置頂當資訊列。
+            List<String> extraMachine = new ArrayList<>();
             List<ReplyS2C.Extra> extras = primaryOut == null
                     ? List.of()
-                    : findHiddenHasRecipe((PatternEncodingTermMenu) menu, containers, primaryOut, player.level(), gridCache);
+                    : findHiddenHasRecipe((PatternEncodingTermMenu) menu, containers, primaryOut, player.level(),
+                            gridCache, extraMachine);
             CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
-                    new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe, extras, tier));
+                    new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe, extras, tier, sugMachine,
+                            extraMachine.toArray(new String[0])));
         });
         ctx.setPacketHandled(true);
     }
@@ -322,7 +354,8 @@ public final class Network {
      */
     private static List<ReplyS2C.Extra> findHiddenHasRecipe(PatternEncodingTermMenu menu, List<?> current,
                                                             AEKey primaryOut, Level level,
-                                                            java.util.IdentityHashMap<IGrid, String[]> gridCache) {
+                                                            java.util.IdentityHashMap<IGrid, String[]> gridCache,
+                                                            List<String> extraMachine) {
         List<ReplyS2C.Extra> out = new ArrayList<>();
         try {
             IGridNode node = menu.getNetworkNode();
@@ -355,9 +388,10 @@ public final class Network {
                     } catch (Throwable ignored) {
                         // 標籤取不到 → 空字串（客戶端退樣板 icon／空名）
                     }
-                    String sug = c instanceof IExtendedPatternContainer.IPPPC ippc
-                            ? resolveSuggested(ippc, gridCache)[0] : "";
-                    out.add(new ReplyS2C.Extra(name, iconId, sug, countFreePatternSlots(c)));
+                    String[] r = c instanceof IExtendedPatternContainer.IPPPC ippc
+                            ? resolveSuggested(ippc, gridCache) : NONE;
+                    out.add(new ReplyS2C.Extra(name, iconId, r[0], countFreePatternSlots(c)));
+                    extraMachine.add(r[2]); // 與 extras 同序（實際機器物品 id；空＝退類型代表機器）
                     if (out.size() >= MAX_EXTRAS) {
                         break outer;
                     }
@@ -466,8 +500,8 @@ public final class Network {
      * 貼「超立方體發生器」（無配方邏輯的代理機器）→ 追其綁定目標判定（見 {@link #tesseractSuggestion}；
      * 存儲總線貼 tesseract 亦同，走 {@link #suggestionOrTesseract}）。
      */
-    /** 「無建議」雙值常量（{建議, 電壓}）；只讀不改，安全共用。 */
-    private static final String[] NONE = { "", "" };
+    /** 「無建議」三值常量（{建議, 電壓, 實際機器物品 id}）；只讀不改，安全共用。 */
+    private static final String[] NONE = { "", "", "" };
 
     private static String[] resolveSuggested(IExtendedPatternContainer.IPPPC ippc,
                                              java.util.IdentityHashMap<IGrid, String[]> gridCache) {
@@ -508,8 +542,9 @@ public final class Network {
      *（本地明明有機器卻判不出）。本地優先確保「本地能判者一律照舊」，跨橋只當本地無機器時的補救、零回歸。
      */
     private static String[] scanSubnetForMachine(IGrid startGrid) {
-        // 建議字串為鍵去重（多台同型同模式＝一種；不同模式＝兩種，歧義不猜）；值＝首見機器的電壓
-        java.util.LinkedHashMap<String, String> found = new java.util.LinkedHashMap<>();
+        // 建議字串為鍵去重（多台同型同模式＝一種；不同模式＝兩種，歧義不猜）；
+        // 值＝{首見機器的電壓, 機器物品 id}（同鍵撞到不同機器物品 → 物品清空，客戶端退類型代表機器）
+        java.util.LinkedHashMap<String, String[]> found = new java.util.LinkedHashMap<>();
         // 本地優先：接口自己的子網
         if (collectStorageBusMachines(startGrid, found)) {
             return NONE; // 本地就多台 → 歧義
@@ -533,13 +568,13 @@ public final class Network {
         return found.size() == 1 ? firstEntry(found) : NONE;
     }
 
-    private static String[] firstEntry(java.util.LinkedHashMap<String, String> found) {
+    private static String[] firstEntry(java.util.LinkedHashMap<String, String[]> found) {
         var e = found.entrySet().iterator().next();
-        return new String[] { e.getKey(), e.getValue() };
+        return new String[] { e.getKey(), e.getValue()[0], e.getValue()[1] };
     }
 
-    /** 掃單一 grid 的存儲總線、把貼的機器（建議字串→電壓）加進 found；本趟累計 >1（歧義）回 true。 */
-    private static boolean collectStorageBusMachines(IGrid grid, java.util.LinkedHashMap<String, String> found) {
+    /** 掃單一 grid 的存儲總線、把貼的機器（建議字串→{電壓,機器物品}）加進 found；本趟累計 >1（歧義）回 true。 */
+    private static boolean collectStorageBusMachines(IGrid grid, java.util.LinkedHashMap<String, String[]> found) {
         for (var machineClass : grid.getMachineClasses()) {
             if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
                 continue;
@@ -556,7 +591,10 @@ public final class Network {
                 // 總線貼 tesseract 也追綁定目標（1.18.1）：suggestionOrTesseract 共用直貼機器同款解析
                 String[] st = suggestionOrTesseract(busHost.getLevel().getBlockEntity(target));
                 if (!st[0].isEmpty()) {
-                    found.putIfAbsent(st[0], st[1]);
+                    String[] prev = found.putIfAbsent(st[0], new String[] { st[1], st[2] });
+                    if (prev != null && !prev[1].equals(st[2])) {
+                        prev[1] = ""; // 同建議不同機器物品（同類型異機種）→ 物品不猜
+                    }
                     if (found.size() > 1) {
                         return true; // 歧義
                     }
@@ -718,6 +756,7 @@ public final class Network {
         if (mm instanceof IMultiTesseract multi) {
             java.util.TreeSet<String> union = new java.util.TreeSet<>(); // canonical：排序去重
             java.util.TreeSet<String> tiers = new java.util.TreeSet<>();
+            java.util.TreeSet<String> items = new java.util.TreeSet<>();
             int total = multi.getTotalBlockEntities();
             for (int i = 0; i < total; i++) {
                 BlockEntity be = multi.getBlockEntity(i);
@@ -728,14 +767,19 @@ public final class Network {
                     if (!tn.isEmpty()) {
                         tiers.add(tn);
                     }
+                    String mi = machineItemOf(be);
+                    if (!mi.isEmpty()) {
+                        items.add(mi);
+                    }
                 }
             }
-            // 電壓：綁定機器唯一電壓才回報（多電壓混綁不猜）
-            return new String[] { String.join(",", union), tiers.size() == 1 ? tiers.first() : "" };
+            // 電壓／機器物品：綁定機器唯一才回報（混綁不猜——機器物品混綁時客戶端退類型代表機器）
+            return new String[] { String.join(",", union), tiers.size() == 1 ? tiers.first() : "",
+                    items.size() == 1 ? items.first() : "" };
         }
         if (mm instanceof TesseractMachine tm && tm.pos != null && tm.getLevel() != null) {
             BlockEntity t = tm.getLevel().getBlockEntity(tm.pos);
-            return new String[] { suggestionOf(t), tierNameOf(t) };
+            return new String[] { suggestionOf(t), tierNameOf(t), machineItemOf(t) };
         }
         return NONE;
     }
@@ -747,12 +791,33 @@ public final class Network {
     private static String[] suggestionOrTesseract(@Nullable BlockEntity be) {
         String s = suggestionOf(be);
         if (!s.isEmpty()) {
-            return new String[] { s, tierNameOf(be) };
+            return new String[] { s, tierNameOf(be), machineItemOf(be) };
         }
         if (be instanceof MetaMachineBlockEntity mmbe) {
             return tesseractSuggestion(mmbe.getMetaMachine());
         }
         return NONE;
+    }
+
+    /**
+     * 方塊實體所屬機器的**機器物品 id**（多方塊部件取控制器 definition 的物品）；判不出回 ""。
+     * 建議只帶配方類型時，客戶端顯示會退「該類型代表機器」——化工廠（與大型化學反應釜同類型）
+     * 經超立方判定會被顯示成大型化學反應釜。附上實際機器物品，客戶端建議列即顯示真機器。
+     */
+    private static String machineItemOf(@Nullable BlockEntity be) {
+        try {
+            if (!(be instanceof MetaMachineBlockEntity mmbe)) {
+                return "";
+            }
+            MetaMachine mm = mmbe.getMetaMachine();
+            if (mm instanceof IMultiPart part && part.getController() != null) {
+                mm = part.getController().self();
+            }
+            var item = mm.getDefinition().asStack().getItem();
+            return net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item).toString();
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     /** 方塊實體所屬機器的電壓等級名；非 GT 機器回 ""。 */
