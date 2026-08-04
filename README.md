@@ -35,6 +35,12 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
     helper：ITieredMachine → maxOverclockTier → 超頻電壓反推）。已判定機器列第一行顯示「機器名＋電壓」；
     搜尋鍵＝標籤＋機器類型名＋電壓——打「壓印」「EV」都過濾得到（GTO 標籤有無帶電壓皆可）。
     舊伺服端沒回 → 電壓空、不顯示不參與搜尋。
+- **GTO 樣板總成支援（1.26.0）**：樣板總成（`MEPatternPartMachineKt` 家族，直接放樣板的機器型容器、
+  免樣板供應器）**直接實作** `IExtendedPatternContainer` 而非 AE2 供應器的 IPPPC mixin → 修前伺服端
+  整段跳過：無座標、無建議、無剩餘格、無已有判定。現迴圈改判 `IExtendedPatternContainer`：剩餘格／
+  已有配方對任何樣板容器都走 `PatternContainer` 樣板庫存；機器型容器（`instanceof MetaMachine`）座標取
+  機器本體、建議走其 BE（`suggestionOf` 的 IMultiPart 分支 → 可程式化設定／多方塊控制器、電壓、實際
+  機器物品一併回報）。extras 枚舉同款補。客戶端零改動。
 - **列右緣顯示樣板槽剩餘空格（1.15.0）**：伺服端隨座標封包回報各供應器 `getTerminalPatternInventory()`
   空格數（`ReplyS2C` **尾綴欄位**，協定號不變：舊伺服端沒寫 → decode 以 `isReadable()` 判缺、全 -1 不顯示；
   舊客戶端不讀尾綴 bytes 無害——版本不齊零故障）。綠字＝有空位、紅灰＝滿；-1（伺服端沒裝本 mod）不畫，

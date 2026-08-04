@@ -289,19 +289,37 @@ public final class Network {
                 tier[i] = "";
                 sugMachine[i] = "";
                 free[i] = -1;
-                if (o instanceof IExtendedPatternContainer.IPPPC ippc) {
-                    Level level = ippc.gto$getLevel();
-                    BlockPos pos = ippc.gto$getBlockPos();
-                    if (level != null && pos != null) {
-                        dims[i] = level.dimension().location();
-                        packed[i] = pos.asLong();
+                if (o instanceof IExtendedPatternContainer c) {
+                    // 剩餘格／已有配方對「任何」樣板容器都算得出（走 PatternContainer 樣板庫存）——
+                    // GTO 樣板總成（MEPatternPartMachineKt 家族：直接實作 IExtendedPatternContainer、
+                    // 非 AE2 供應器、無 IPPPC mixin）也涵蓋。
+                    free[i] = countFreePatternSlots(c);
+                    hasRecipe[i] = primaryOut != null && containsPrimaryOutput(c, primaryOut, player.level());
+                    if (c instanceof IExtendedPatternContainer.IPPPC ippc) {
+                        Level level = ippc.gto$getLevel();
+                        BlockPos pos = ippc.gto$getBlockPos();
+                        if (level != null && pos != null) {
+                            dims[i] = level.dimension().location();
+                            packed[i] = pos.asLong();
+                        }
+                        String[] r = resolveSuggested(ippc, gridCache);
+                        suggest[i] = r[0];
+                        tier[i] = r[1];
+                        sugMachine[i] = r[2];
+                    } else if (c instanceof MetaMachine mm) {
+                        // 機器型樣板容器（樣板總成等）：座標取機器本體；建議走其 BE
+                        //（suggestionOf 的 IMultiPart 分支 → 可程式化設定／多方塊控制器）
+                        Level level = mm.getLevel();
+                        BlockPos pos = mm.getPos();
+                        if (level != null && pos != null) {
+                            dims[i] = level.dimension().location();
+                            packed[i] = pos.asLong();
+                            String[] r = suggestionOrTesseract(level.getBlockEntity(pos));
+                            suggest[i] = r[0];
+                            tier[i] = r[1];
+                            sugMachine[i] = r[2];
+                        }
                     }
-                    String[] r = resolveSuggested(ippc, gridCache);
-                    suggest[i] = r[0];
-                    tier[i] = r[1];
-                    sugMachine[i] = r[2];
-                    free[i] = countFreePatternSlots(ippc);
-                    hasRecipe[i] = primaryOut != null && containsPrimaryOutput(ippc, primaryOut, player.level());
                 }
             }
             // GTO 建清單時把「已有該配方」的供應器整列移除（removeIf canAddPattern && containsPrimaryOutput）
@@ -388,8 +406,14 @@ public final class Network {
                     } catch (Throwable ignored) {
                         // 標籤取不到 → 空字串（客戶端退樣板 icon／空名）
                     }
-                    String[] r = c instanceof IExtendedPatternContainer.IPPPC ippc
-                            ? resolveSuggested(ippc, gridCache) : NONE;
+                    String[] r;
+                    if (c instanceof IExtendedPatternContainer.IPPPC ippc) {
+                        r = resolveSuggested(ippc, gridCache);
+                    } else if (c instanceof MetaMachine mm && mm.getLevel() != null && mm.getPos() != null) {
+                        r = suggestionOrTesseract(mm.getLevel().getBlockEntity(mm.getPos())); // 樣板總成等機器型容器
+                    } else {
+                        r = NONE;
+                    }
                     out.add(new ReplyS2C.Extra(name, iconId, r[0], countFreePatternSlots(c)));
                     extraMachine.add(r[2]); // 與 extras 同序（實際機器物品 id；空＝退類型代表機器）
                     if (out.size() >= MAX_EXTRAS) {
