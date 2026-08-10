@@ -41,6 +41,17 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   已有配方對任何樣板容器都走 `PatternContainer` 樣板庫存；機器型容器（`instanceof MetaMachine`）座標取
   機器本體、建議走其 BE（`suggestionOf` 的 IMultiPart 分支 → 可程式化設定／多方塊控制器、電壓、實際
   機器物品一併回報）。extras 枚舉同款補。客戶端零改動。
+- **超級分子裝配室機器判定（1.27.0）**：SMA（高級分子裝配室多方塊）以「合成樣板倉」部件
+  （`MECraftPatternPartMachine`，樣板總成家族）直接收合成樣板，但控制器配方類型只掛 **DUMMY_RECIPES**
+  （無真實配方類型）→ 修前伺服端 `machineTypeOf` 過濾 DUMMY 後建議／電壓／實際機器全空，客戶端 icon
+  反查又收了 DUMMY 佔位（誤判「標籤已可判」）——機器判定永遠「未知」。現三處補齊：
+  伺服端樣板總成部件（含 extras 枚舉）建議判空但**部件已成形** → 仍回報控制器**機器物品＋電壓**
+  （`suggest` 維持空——無類型可比對，匹配邏輯不變）；客戶端 icon 反查表剔除 DUMMY/HATCH_COMBINED
+  （佔位型機器視同反查不到 → 建議門檻放行，MACHINE_SELECT 清單也不再出現 DUMMY）；面板列配方類型
+  判不出但伺服端回報了實際機器物品（同 `usableSuggestionFor` 門檻：icon 反查不到才採用）→ 照
+  「已判定機器」顯示（icon＋機器名＋電壓、青色建議標示、搜尋鍵；標籤與機器名同字樣＝未改名成形
+  樣板總成維持單行不重複）。聊天欄回報經 `sentDisplayName` 既有 sugMachine 優先路自動涵蓋；
+  合成直傳原本就以 icon 認 SMA（`super_molecular_assembler` 含 `molecular_assembler` 子串），不變。
 - **列右緣顯示樣板槽剩餘空格（1.15.0）**：伺服端隨座標封包回報各供應器 `getTerminalPatternInventory()`
   空格數（`ReplyS2C` **尾綴欄位**，協定號不變：舊伺服端沒寫 → decode 以 `isReadable()` 判缺、全 -1 不顯示；
   舊客戶端不讀尾綴 bytes 無害——版本不齊零故障）。綠字＝有空位、紅灰＝滿；-1（伺服端沒裝本 mod）不畫，

@@ -287,10 +287,18 @@ final class UploadOverlay {
                 String filterText = providerName + (tier.isEmpty() ? "" : " " + tier);
                 // 建議路徑的實際機器（伺服端回報）：同類型異機種（化工廠 vs 大型化學反應釜）不再顯示成
                 // 類型代表機器；未回報（舊伺服端／混綁不唯一）退類型代表機器。手動指定者尊重玩家選的類型顯示。
-                ItemStack actual = p.suggested()
-                        ? PatternUploadClient.machineItemStack(PatternUploadClient.machineItemFor(dest.index()))
-                        : null;
-                if (assigned != null) {
+                // 配方類型判不出（assigned null）但伺服端回報了實際機器物品——超級分子裝配室等 DUMMY 型
+                // 機器的樣板總成部件——也採用：門檻與 usableSuggestionFor 一致（icon 反查不到才用，
+                // 未改名直貼機器供應器顯示零變動）。
+                ItemStack actual = (p.suggested()
+                        || (assigned == null && RecipeTypeIcons.typesForIcon(dest.icon()) == null))
+                                ? PatternUploadClient.machineItemStack(PatternUploadClient.machineItemFor(dest.index()))
+                                : null;
+                if (assigned == null && actual != null && stripFmt(providerName).equals(
+                        actual.getHoverName().getString() + (tier.isEmpty() ? "" : " " + tier))) {
+                    actual = null; // 標籤已是同字樣（未改名的成形樣板總成）→ 照舊單行顯示，不重複括號列
+                }
+                if (assigned != null || actual != null) {
                     // 已判定機器：icon 換成該機器；第一行放「機器名＋電壓」，原標籤（改名後的自訂名）換行放括號裡（見 render）。
                     String machineName = (actual != null
                             ? actual.getHoverName().getString()
@@ -303,9 +311,11 @@ final class UploadOverlay {
                     continue;
                 }
                 boolean hasRecipe = PatternUploadClient.hasRecipeFor(dest.index());
-                if (assigned != null) {
+                if (assigned != null || actual != null) {
+                    // 機器物品但無配方類型（assigned null）＝建議來源 → suggested 青色標示
                     rows.add(new Row(actual != null ? actual : RecipeTypeIcons.icon(assigned), null, display,
-                            dest.full(), dest.index(), assigned, providerName, p.posKey(), p.suggested(), hasRecipe));
+                            dest.full(), dest.index(), assigned, providerName, p.posKey(),
+                            assigned == null || p.suggested(), hasRecipe));
                 } else {
                     rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName,
                             p.posKey(), false, hasRecipe));
@@ -395,6 +405,12 @@ final class UploadOverlay {
             return 1;
         }
         return 3;
+    }
+
+    /** 去除 § 格式碼後的素字串（GTO 標籤的電壓帶顏色碼，與素字串比對用）。 */
+    private static String stripFmt(String s) {
+        String r = net.minecraft.ChatFormatting.stripFormatting(s);
+        return r == null ? "" : r;
     }
 
     /**
@@ -557,7 +573,9 @@ final class UploadOverlay {
                 }
             }
             int nameW = cw - 25 - freeW;
-            if (mode == Mode.DESTINATIONS && row.type() != null && !row.providerName().isEmpty()) {
+            // 已判定機器列＝有配方類型（type）或伺服端回報實際機器（icon 已換機器物品、type 可為 null，
+            // 如超級分子裝配室的合成樣板倉）；未判定列 icon 為 null（畫 AEKey 原 icon）。
+            if (mode == Mode.DESTINATIONS && (row.type() != null || row.icon() != null) && !row.providerName().isEmpty()) {
                 // 已判定機器：第一行機器名，第二行括號放（改名後的）原標籤；「通用工廠 - 子機器」只留子機器。
                 // 機器名顏色：手動指定＝白；伺服端建議（接口→存儲總線自動解析）＝青色標示，可分辨並提醒可手動覆寫。
                 String[] pf = splitFactoryName(row.providerName());
