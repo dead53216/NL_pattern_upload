@@ -141,8 +141,6 @@ public final class Network {
      * {@code sugMachine[i]} 為建議路徑解析到的**實際機器物品 id**（唯一機器/機種才回報；空＝退類型代表機器）：
      * 建議只帶配方類型時客戶端顯示會退「類型代表機器」——化工廠經超立方判定會被顯示成同類型的
      * 大型化學反應釜，附實際機器物品即顯示真機器。{@code extraMachine} 為 extras 的同款資訊（照 extras 順序）。
-     * 1.27.0 起：樣板總成部件的控制器**無真實配方類型**（DUMMY，如超級分子裝配室）時，{@code suggest}
-     * 雖空仍回報 {@code sugMachine}＋{@code tier}（機器身分與電壓不因無配方類型而消失）。
      * <p>
      * {@code free}（1.15.0）、{@code hasRecipe}（1.16.0）、{@code extras}（1.17.0）、{@code tier}（1.20.0）、
      * {@code sugMachine}/{@code extraMachine}（1.25.0）是**尾綴欄位**（協定號不變）：encode 依序寫在
@@ -316,7 +314,7 @@ public final class Network {
                         if (level != null && pos != null) {
                             dims[i] = level.dimension().location();
                             packed[i] = pos.asLong();
-                            String[] r = machineContainerSuggestion(level.getBlockEntity(pos));
+                            String[] r = suggestionOrTesseract(level.getBlockEntity(pos));
                             suggest[i] = r[0];
                             tier[i] = r[1];
                             sugMachine[i] = r[2];
@@ -412,7 +410,7 @@ public final class Network {
                     if (c instanceof IExtendedPatternContainer.IPPPC ippc) {
                         r = resolveSuggested(ippc, gridCache);
                     } else if (c instanceof MetaMachine mm && mm.getLevel() != null && mm.getPos() != null) {
-                        r = machineContainerSuggestion(mm.getLevel().getBlockEntity(mm.getPos())); // 樣板總成等機器型容器
+                        r = suggestionOrTesseract(mm.getLevel().getBlockEntity(mm.getPos())); // 樣板總成等機器型容器
                     } else {
                         r = NONE;
                     }
@@ -823,23 +821,6 @@ public final class Network {
             return tesseractSuggestion(mmbe.getMetaMachine());
         }
         return NONE;
-    }
-
-    /**
-     * 機器型樣板容器（樣板總成家族）專用建議：先走 {@link #suggestionOrTesseract}（部件設定／控制器
-     * 配方類型）；配方類型判不出——如「合成樣板倉」的控制器**超級分子裝配室**只掛 DUMMY_RECIPES
-     *（{@link #machineTypeOf} 過濾後為空）——但部件已成形（有控制器）時，仍回報**實際機器物品＋電壓**
-     *（{@link #machineItemOf}／{@link #tierNameOf} 自會解析到控制器）：客戶端據此顯示「機器＝超級分子
-     * 裝配室」與電壓、搜尋鍵。未成形部件不補（machineItemOf 會退部件自身物品，誤導）；
-     * 非 GT 機器容器（分子裝配室等）不受影響（instanceof 不命中、原樣返回）。
-     */
-    private static String[] machineContainerSuggestion(@Nullable BlockEntity be) {
-        String[] r = suggestionOrTesseract(be);
-        if (r[2].isEmpty() && be instanceof MetaMachineBlockEntity mmbe
-                && mmbe.getMetaMachine() instanceof IMultiPart part && part.getController() != null) {
-            return new String[] { r[0], tierNameOf(be), machineItemOf(be) };
-        }
-        return r;
     }
 
     /**

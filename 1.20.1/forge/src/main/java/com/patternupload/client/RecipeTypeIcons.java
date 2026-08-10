@@ -55,12 +55,7 @@ public final class RecipeTypeIcons {
             ItemStack stack = def.asStack();
             String hoverName = stack.getHoverName().getString();
             for (GTRecipeType type : types) {
-                // DUMMY／HATCH_COMBINED 非真實配方類型（超級分子裝配室等機器以 DUMMY_RECIPES 佔位）：
-                // 不入表——這類機器的 icon 反查應視同「反查不到」（讓伺服端建議／實際機器回報補位，
-                // usableSuggestionFor 門檻才會放行），MACHINE_SELECT 清單也不該出現這兩項。
-                if (type != null
-                        && type != com.gtocore.common.data.GTORecipeTypes.DUMMY_RECIPES
-                        && type != com.gtocore.common.data.GTORecipeTypes.HATCH_COMBINED) {
+                if (type != null) {
                     // 註冊順序大致由低階到高階，保留最先出現的機器當代表
                     iconCache.putIfAbsent(type, stack);
                     // 反向表：機器物品 → 支援的配方類型（本地排序用）
