@@ -308,7 +308,15 @@ final class UploadOverlay {
                 ItemStack actual = p.suggested()
                         ? PatternUploadClient.machineItemStack(PatternUploadClient.machineItemFor(dest.index()))
                         : null;
-                if (assigned != null) {
+                // 改名救援（1.29.0）：樣板總成用內建改名後，GTO 標籤變成**純自訂名**（`forPatternBuffer`
+                // 的 customName 分支），但 icon 仍是機器物品 → 機器判得出、只是名字沒顯示。這裡補出
+                // 顯示用機器，讓它比照子網建議路徑顯示「機器名 (自訂名)」兩行。排序與匹配完全不受影響
+                //（只動 Row 顯示，Pre.effective／tier 不變）。
+                if (assigned == null && actual == null) {
+                    actual = renamedIconMachine(dest, providerName);
+                }
+                boolean machineShown = assigned != null || actual != null;
+                if (machineShown) {
                     // 已判定機器：icon 換成該機器；第一行放「機器名＋電壓」，原標籤（改名後的自訂名）換行放括號裡（見 render）。
                     String machineName = (actual != null
                             ? actual.getHoverName().getString()
@@ -321,9 +329,11 @@ final class UploadOverlay {
                     continue;
                 }
                 boolean hasRecipe = PatternUploadClient.hasRecipeFor(dest.index());
-                if (assigned != null) {
+                if (machineShown) {
+                    // 機器名顏色：手動指定＝白；伺服端建議與改名救援＝青（自動判定，可手動覆寫）
                     rows.add(new Row(actual != null ? actual : RecipeTypeIcons.icon(assigned), null, display,
-                            dest.full(), dest.index(), assigned, providerName, p.posKey(), p.suggested(), hasRecipe));
+                            dest.full(), dest.index(), assigned, providerName, p.posKey(),
+                            p.suggested() || assigned == null, hasRecipe));
                 } else {
                     rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName,
                             p.posKey(), false, hasRecipe));
@@ -344,6 +354,43 @@ final class UploadOverlay {
             }
         }
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - contentRows()));
+    }
+
+    /**
+     * 被**內建改名**的目的地（樣板總成等）的顯示用機器物品；未改名／判不出回 null。
+     * <p>
+     * GTO 的 `PatternContainerGroupHelper.forPatternBuffer` 在 customName 非空且不以 `+` 開頭時，
+     * 直接回「icon＝控制器機器物品、名稱＝**純自訂名**」——機器判定其實還在（icon 反查得到），
+     * 只是標籤裡再也沒有機器名，面板遂只顯示自訂名一行。判準即「icon 反查得到機器**且**標籤不含該機器名」：
+     * 未改名時 GTO 標籤必含機器名（格式 `%m %t %s %r` 的 `%m`），改名後只剩自訂名。
+     * <p>
+     * AE2 供應器改名是另一回事（icon 會變成供應器自身物品、機器資訊全失，靠伺服端建議救援，見 1.13.1），
+     * 那條路 icon 反查必為 null → 不會走到這裡，兩者互不干擾。
+     */
+    @org.jetbrains.annotations.Nullable
+    private static ItemStack renamedIconMachine(ListBoxReflector.Dest dest, String providerName) {
+        try {
+            if (RecipeTypeIcons.typesForIcon(dest.icon()) == null) {
+                return null; // icon 不是（有配方的）機器物品 → 非本情境
+            }
+            if (!(dest.icon() instanceof appeng.api.stacks.AEItemKey ik)) {
+                return null;
+            }
+            ItemStack stack = new ItemStack(ik.getItem());
+            String machineName = stack.getHoverName().getString();
+            if (machineName.isEmpty() || stripFmt(providerName).contains(stripFmt(machineName))) {
+                return null; // 標籤已含機器名＝未改名（GTO 原標籤）→ 顯示照舊
+            }
+            return stack;
+        } catch (Throwable ignored) {
+            return null; // 任何異常 → 維持原顯示
+        }
+    }
+
+    /** 去除 § 格式碼後的素字串（GTO 標籤的電壓帶顏色碼，與素字串比對用）。 */
+    private static String stripFmt(String s) {
+        String r = net.minecraft.ChatFormatting.stripFormatting(s);
+        return r == null ? "" : r;
     }
 
     /** 目的地 icon（AEKey＝供應器貼著的機器物品）的 registry id；非物品／取不到回 ""。 */
@@ -588,7 +635,10 @@ final class UploadOverlay {
                 }
             }
             int nameW = cw - 25 - freeW;
-            if (mode == Mode.DESTINATIONS && row.type() != null && !row.providerName().isEmpty()) {
+            // 已顯示機器的列＝有配方類型（type）或 icon 已換成機器物品（改名救援：type 可為 null）；
+            // 未判定列 icon 為 null（畫 AEKey 原 icon）。
+            if (mode == Mode.DESTINATIONS && (row.type() != null || row.icon() != null)
+                    && !row.providerName().isEmpty()) {
                 // 已判定機器：第一行機器名，第二行括號放（改名後的）原標籤；「通用工廠 - 子機器」只留子機器。
                 // 機器名顏色：手動指定＝白；伺服端建議（接口→存儲總線自動解析）＝青色標示，可分辨並提醒可手動覆寫。
                 String[] pf = splitFactoryName(row.providerName());
