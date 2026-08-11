@@ -71,6 +71,9 @@ public final class PatternUploadClient {
     /** extras 的實際機器物品 id（照 extras 順序）。 */
     @Nullable
     private static String[] posExtraMachine = null;
+    /** 各目的地所服務機器的身分鍵（{@code <dim>#<packedLong>}，多方塊為控制器座標；空＝判不出）。 */
+    @Nullable
+    private static String[] posMachineKey = null;
     /** 各目的地建議機器的電壓等級名（GTValues.VN 如 "LV"，照 index 對齊；空字串＝未知）。 */
     @Nullable
     private static String[] posTier = null;
@@ -112,6 +115,7 @@ public final class PatternUploadClient {
         posTier = null;
         posSugMachine = null;
         posExtraMachine = null;
+        posMachineKey = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -134,6 +138,7 @@ public final class PatternUploadClient {
         posTier = msg.tier();
         posSugMachine = msg.sugMachine();
         posExtraMachine = msg.extraMachine();
+        posMachineKey = msg.machineKey();
         LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
         if (pendingDests != null) {
             decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板
@@ -248,6 +253,15 @@ public final class PatternUploadClient {
     /** 第 index 個目的地建議路徑的實際機器物品 id；未知回 ""（顯示退類型代表機器）。 */
     static String machineItemFor(int index) {
         String[] m = posSugMachine;
+        return (m == null || index < 0 || index >= m.length || m[index] == null) ? "" : m[index];
+    }
+
+    /**
+     * 第 index 個目的地所服務機器的**身分鍵**（多方塊為控制器座標）；未知／舊伺服端回 ""。
+     * 機器類型與物品只能證明「同款」，這個鍵才能證明「**同一台**」——供 {@link #sameMachineAndMode} 判合併。
+     */
+    static String machineKeyFor(int index) {
+        String[] m = posMachineKey;
         return (m == null || index < 0 || index >= m.length || m[index] == null) ? "" : m[index];
     }
 
@@ -700,9 +714,12 @@ public final class PatternUploadClient {
                     matches.add(d);
                 }
             }
-            // 嚴格唯一（1.24.0，收回 1.23.0 的「簽章全同視同單一」）：match 多於一個——
-            // 即使是同一台機器掛多個供應器／同款可互換機器——一律開面板讓玩家選，不自動直傳。
-            ListBoxReflector.Dest single = matches.size() == 1 ? matches.get(0) : null;
+            // 嚴格唯一（1.24.0）：match 多於一個一律開面板讓玩家選，不自動直傳。
+            // **例外（1.27.0）**：多個 match 全都指向**同一台機器且同一模式**（伺服端機器身分鍵相同）
+            // → 送哪個供應器結果都一樣，視同單一匹配自動直傳（見 mergedSingle）。
+            // 同款不同台的可互換機器仍不合併（那是 1.23.0 被收回的行為）。
+            ListBoxReflector.Dest single = matches.size() == 1 ? matches.get(0) : mergedSingle(matches);
+            boolean merged = single != null && matches.size() > 1;
             if (single != null && extraDests().isEmpty()) {
                 // extras 非空＝網路上已有供應器裝著這張樣板（GTO 從清單藏掉）→ 不自動直傳，
                 // 開面板讓玩家看到置頂的「已有該配方」列再自行決定（避免無感重複鋪樣板）。
@@ -727,7 +744,9 @@ public final class PatternUploadClient {
                     player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
                             "pattern_upload.sent", sentDisplayName(target, eff != null ? eff : current)), false);
                 }
-                LOGGER.info("[pattern_upload] pattern sent directly to '{}' (single type match)", target.name().getString());
+                LOGGER.info("[pattern_upload] pattern sent directly to '{}' ({})", target.name().getString(),
+                        merged ? matches.size() + " providers on the same machine+mode → merged"
+                                : "single type match");
                 return;
             }
             if (matches.size() > 1) {
@@ -741,6 +760,64 @@ public final class PatternUploadClient {
         // 座標／建議已在 pending 期間請求過，此時已載入 → 面板直接顯示正確機器與排序
         overlay = new UploadOverlay(screen, dests, force);
         LOGGER.info("[pattern_upload] opened panel: {} entries", dests.size());
+    }
+
+    /**
+     * 多個明確匹配但**全部指向同一台機器、同一模式**時，挑出的代表目的地（視同單一匹配自動直傳）；
+     * 條件不成立回 null（照 1.24.0 嚴格唯一開面板）。
+     * <p>
+     * 「同一台」以伺服端回報的機器身分鍵（多方塊＝控制器座標）判定——機器類型與物品只證明得了「同款」，
+     * 兩台同款機器各掛一個供應器仍須玩家自選（1.23.0 曾合併同款、已收回）。判不出身分（舊伺服端、
+     * 接口子網歧義、tesseract 混綁）一律不合併。
+     * <p>
+     * 「同一模式」除機器相同外再比**伺服端建議原字串**與**手動指定**：同一台機器的兩個供應器可能貼在
+     * 設了不同配方類型的可程式化倉上（{@code programmedTypeOf} 優先於控制器），或被玩家手動指成不同機器
+     * ——這種情況送誰結果不同，不可合併。
+     * <p>
+     * 代表取**剩餘空格最少**的那個（優先塞快滿的供應器、讓樣板集中，與面板 1.19.0 排序同理念）；
+     * 空格未知者排最後，同分取伺服端順序在前者。
+     */
+    @Nullable
+    private static ListBoxReflector.Dest mergedSingle(List<ListBoxReflector.Dest> matches) {
+        if (matches.size() < 2) {
+            return null;
+        }
+        String machineKey = machineKeyFor(matches.get(0).index());
+        if (machineKey.isEmpty()) {
+            return null; // 機器身分判不出 → 不敢視為同一台
+        }
+        String mode = suggestRawFor(matches.get(0).index());
+        GTRecipeType manual0 = manualMachineFor(matches.get(0));
+        for (var d : matches) {
+            if (!machineKey.equals(machineKeyFor(d.index()))
+                    || !mode.equals(suggestRawFor(d.index()))
+                    || manualMachineFor(d) != manual0) {
+                return null;
+            }
+        }
+        ListBoxReflector.Dest best = null;
+        int bestFree = Integer.MAX_VALUE;
+        for (var d : matches) {
+            int f = freeSlotsFor(d.index());
+            int rank = f < 0 ? Integer.MAX_VALUE : f;
+            if (best == null || rank < bestFree) {
+                best = d;
+                bestFree = rank;
+            }
+        }
+        return best;
+    }
+
+    /** 伺服端建議的**原始字串**（可為逗號串多類型；未回報＝""）——同機合併時用來比「模式是否相同」。 */
+    private static String suggestRawFor(int index) {
+        String[] s = posSuggest;
+        return (s == null || index < 0 || index >= s.length || s[index] == null) ? "" : s[index];
+    }
+
+    /** 該目的地的手動指定機器（座標鍵優先、退名稱鍵）；未指定回 null。 */
+    @Nullable
+    private static GTRecipeType manualMachineFor(ListBoxReflector.Dest d) {
+        return PatternUploadConfig.machineFor(posKeyFor(d.index()), d.name().getString());
     }
 
     /**
@@ -771,6 +848,9 @@ public final class PatternUploadClient {
                     .append(" pos=").append(posKey == null ? "-" : posKey)
                     .append(" tier=").append(tierFor(d.index()).isEmpty() ? "-" : tierFor(d.index()))
                     .append(" machine=").append(machineItemFor(d.index()).isEmpty() ? "-" : machineItemFor(d.index()))
+                    // 機器身分鍵與建議原字串：合併未生效時，一眼看出是「不同台機器」還是「同台不同模式」
+                    .append(" mkey=").append(machineKeyFor(d.index()).isEmpty() ? "-" : machineKeyFor(d.index()))
+                    .append(" mode=").append(suggestRawFor(d.index()).isEmpty() ? "-" : suggestRawFor(d.index()))
                     .append(" free=").append(freeSlotsFor(d.index()));
         }
         return sb.toString();

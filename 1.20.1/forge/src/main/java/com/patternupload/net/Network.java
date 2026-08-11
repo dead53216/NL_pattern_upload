@@ -142,15 +142,19 @@ public final class Network {
      * 建議只帶配方類型時客戶端顯示會退「類型代表機器」——化工廠經超立方判定會被顯示成同類型的
      * 大型化學反應釜，附實際機器物品即顯示真機器。{@code extraMachine} 為 extras 的同款資訊（照 extras 順序）。
      * <p>
+     * {@code machineKey[i]} 為該供應器所服務機器的**身分鍵**（{@code <dim>#<packedLong>}，多方塊取控制器座標；
+     * 空＝判不出／歧義）：機器類型與物品只能證明「同款」，唯有它能證明「**同一台**」——客戶端據此把
+     * 「同一台機器、同一模式的多個供應器」視同單一匹配自動直傳（1.27.0）。
+     * <p>
      * {@code free}（1.15.0）、{@code hasRecipe}（1.16.0）、{@code extras}（1.17.0）、{@code tier}（1.20.0）、
-     * {@code sugMachine}/{@code extraMachine}（1.25.0）是**尾綴欄位**（協定號不變）：encode 依序寫在
+     * {@code sugMachine}/{@code extraMachine}（1.25.0）、{@code machineKey}（1.27.0）是**尾綴欄位**（協定號不變）：encode 依序寫在
      * 原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——舊伺服端沒寫 → 該段取預設（-1／false／空表／""）；
      * 舊客戶端不讀 → 剩餘 bytes 被丟棄無害。兩側版本不齊皆退預設值，不斷線、不炸包。
      * **既有段的每筆格式永不可改**（只能在最後追加新段），否則舊客戶端解流會錯位。
      */
     public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest, int[] free,
                            boolean[] hasRecipe, List<Extra> extras, String[] tier, String[] sugMachine,
-                           String[] extraMachine) {
+                           String[] extraMachine, String[] machineKey) {
 
         /** 被 GTO 藏掉的「已有該配方」供應器：GTOCore 群組標籤名、群組 icon 物品 id、建議機器、剩餘格。 */
         public record Extra(String name, String iconId, String suggest, int free) {}
@@ -188,6 +192,9 @@ public final class Network {
             }
             for (int i = 0; i < m.extras.size(); i++) {
                 b.writeUtf(i < m.extraMachine.length && m.extraMachine[i] != null ? m.extraMachine[i] : "");
+            }
+            for (int i = 0; i < m.packed.length; i++) {
+                b.writeUtf(m.machineKey[i] == null ? "" : m.machineKey[i]);
             }
         }
 
@@ -246,7 +253,15 @@ public final class Network {
                     extraMachine[i] = b.readUtf();
                 }
             }
-            return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe, extras, tier, sugMachine, extraMachine);
+            String[] machineKey = new String[n];
+            java.util.Arrays.fill(machineKey, "");
+            if (b.isReadable()) {
+                for (int i = 0; i < n; i++) {
+                    machineKey[i] = b.readUtf();
+                }
+            }
+            return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe, extras, tier, sugMachine, extraMachine,
+                    machineKey);
         }
     }
 
@@ -276,6 +291,7 @@ public final class Network {
             String[] suggest = new String[n];
             String[] tier = new String[n];
             String[] sugMachine = new String[n];
+            String[] machineKey = new String[n];
             int[] free = new int[n];
             boolean[] hasRecipe = new boolean[n];
             // 本次編碼樣板的主產物（GTO 上傳去重同款判定：mixin 暫存 gto$patternStack → decode → primaryOutput）
@@ -288,6 +304,7 @@ public final class Network {
                 suggest[i] = "";
                 tier[i] = "";
                 sugMachine[i] = "";
+                machineKey[i] = "";
                 free[i] = -1;
                 if (o instanceof IExtendedPatternContainer c) {
                     // 剩餘格／已有配方對「任何」樣板容器都算得出（走 PatternContainer 樣板庫存）——
@@ -306,6 +323,7 @@ public final class Network {
                         suggest[i] = r[0];
                         tier[i] = r[1];
                         sugMachine[i] = r[2];
+                        machineKey[i] = r[3];
                     } else if (c instanceof MetaMachine mm) {
                         // 機器型樣板容器（樣板總成等）：座標取機器本體；建議走其 BE
                         //（suggestionOf 的 IMultiPart 分支 → 可程式化設定／多方塊控制器）
@@ -318,6 +336,7 @@ public final class Network {
                             suggest[i] = r[0];
                             tier[i] = r[1];
                             sugMachine[i] = r[2];
+                            machineKey[i] = r[3];
                         }
                     }
                 }
@@ -331,7 +350,7 @@ public final class Network {
                             gridCache, extraMachine);
             CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
                     new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe, extras, tier, sugMachine,
-                            extraMachine.toArray(new String[0])));
+                            extraMachine.toArray(new String[0]), machineKey));
         });
         ctx.setPacketHandled(true);
     }
@@ -524,8 +543,12 @@ public final class Network {
      * 貼「超立方體發生器」（無配方邏輯的代理機器）→ 追其綁定目標判定（見 {@link #tesseractSuggestion}；
      * 存儲總線貼 tesseract 亦同，走 {@link #suggestionOrTesseract}）。
      */
-    /** 「無建議」三值常量（{建議, 電壓, 實際機器物品 id}）；只讀不改，安全共用。 */
-    private static final String[] NONE = { "", "", "" };
+    /**
+     * 「無建議」四值常量（{建議, 電壓, 實際機器物品 id, 機器身分鍵}）；只讀不改，安全共用。
+     * 機器身分鍵＝所服務機器的**控制器座標**（{@code <dim>#<packedLong>}，見 {@link #machineKeyOf}），
+     * 供客戶端判「多個供應器是否貼同一台機器」（1.27.0 同機同模式自動直傳）。
+     */
+    private static final String[] NONE = { "", "", "", "" };
 
     private static String[] resolveSuggested(IExtendedPatternContainer.IPPPC ippc,
                                              java.util.IdentityHashMap<IGrid, String[]> gridCache) {
@@ -594,10 +617,10 @@ public final class Network {
 
     private static String[] firstEntry(java.util.LinkedHashMap<String, String[]> found) {
         var e = found.entrySet().iterator().next();
-        return new String[] { e.getKey(), e.getValue()[0], e.getValue()[1] };
+        return new String[] { e.getKey(), e.getValue()[0], e.getValue()[1], e.getValue()[2] };
     }
 
-    /** 掃單一 grid 的存儲總線、把貼的機器（建議字串→{電壓,機器物品}）加進 found；本趟累計 >1（歧義）回 true。 */
+    /** 掃單一 grid 的存儲總線、把貼的機器（建議字串→{電壓,機器物品,機器身分鍵}）加進 found；本趟累計 >1（歧義）回 true。 */
     private static boolean collectStorageBusMachines(IGrid grid, java.util.LinkedHashMap<String, String[]> found) {
         for (var machineClass : grid.getMachineClasses()) {
             if (!StorageBusPart.class.isAssignableFrom(machineClass)) {
@@ -615,9 +638,12 @@ public final class Network {
                 // 總線貼 tesseract 也追綁定目標（1.18.1）：suggestionOrTesseract 共用直貼機器同款解析
                 String[] st = suggestionOrTesseract(busHost.getLevel().getBlockEntity(target));
                 if (!st[0].isEmpty()) {
-                    String[] prev = found.putIfAbsent(st[0], new String[] { st[1], st[2] });
+                    String[] prev = found.putIfAbsent(st[0], new String[] { st[1], st[2], st[3] });
                     if (prev != null && !prev[1].equals(st[2])) {
                         prev[1] = ""; // 同建議不同機器物品（同類型異機種）→ 物品不猜
+                    }
+                    if (prev != null && !prev[2].equals(st[3])) {
+                        prev[2] = ""; // 同建議不同機器實體（多台同款）→ 身分不猜，客戶端不合併直傳
                     }
                     if (found.size() > 1) {
                         return true; // 歧義
@@ -781,6 +807,7 @@ public final class Network {
             java.util.TreeSet<String> union = new java.util.TreeSet<>(); // canonical：排序去重
             java.util.TreeSet<String> tiers = new java.util.TreeSet<>();
             java.util.TreeSet<String> items = new java.util.TreeSet<>();
+            java.util.TreeSet<String> keys = new java.util.TreeSet<>();
             int total = multi.getTotalBlockEntities();
             for (int i = 0; i < total; i++) {
                 BlockEntity be = multi.getBlockEntity(i);
@@ -795,15 +822,20 @@ public final class Network {
                     if (!mi.isEmpty()) {
                         items.add(mi);
                     }
+                    String mk = machineKeyOf(be);
+                    if (!mk.isEmpty()) {
+                        keys.add(mk);
+                    }
                 }
             }
-            // 電壓／機器物品：綁定機器唯一才回報（混綁不猜——機器物品混綁時客戶端退類型代表機器）
+            // 電壓／機器物品／機器身分：綁定機器唯一才回報（混綁不猜——機器物品混綁時客戶端退類型代表機器；
+            // 身分不唯一時客戶端不把這些供應器視為「同一台機器」）
             return new String[] { String.join(",", union), tiers.size() == 1 ? tiers.first() : "",
-                    items.size() == 1 ? items.first() : "" };
+                    items.size() == 1 ? items.first() : "", keys.size() == 1 ? keys.first() : "" };
         }
         if (mm instanceof TesseractMachine tm && tm.pos != null && tm.getLevel() != null) {
             BlockEntity t = tm.getLevel().getBlockEntity(tm.pos);
-            return new String[] { suggestionOf(t), tierNameOf(t), machineItemOf(t) };
+            return new String[] { suggestionOf(t), tierNameOf(t), machineItemOf(t), machineKeyOf(t) };
         }
         return NONE;
     }
@@ -815,7 +847,7 @@ public final class Network {
     private static String[] suggestionOrTesseract(@Nullable BlockEntity be) {
         String s = suggestionOf(be);
         if (!s.isEmpty()) {
-            return new String[] { s, tierNameOf(be), machineItemOf(be) };
+            return new String[] { s, tierNameOf(be), machineItemOf(be), machineKeyOf(be) };
         }
         if (be instanceof MetaMachineBlockEntity mmbe) {
             return tesseractSuggestion(mmbe.getMetaMachine());
@@ -839,6 +871,33 @@ public final class Network {
             }
             var item = mm.getDefinition().asStack().getItem();
             return net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item).toString();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /**
+     * 方塊實體所屬機器的**身分鍵**（{@code <dim>#<packedLong>}；多方塊部件取**控制器**座標）；判不出回 ""。
+     * <p>
+     * 供客戶端判「多個供應器貼的是不是**同一台**機器」——同一台機器掛數個供應器（或一個直貼＋一個
+     * 走接口子網）時，各供應器自身座標不同、機器類型與物品又只能證明「同款」，唯有控制器座標能證明
+     * 「同一台」。1.27.0 的「同機同模式視同單一、自動直傳」以此為準。
+     */
+    private static String machineKeyOf(@Nullable BlockEntity be) {
+        try {
+            if (!(be instanceof MetaMachineBlockEntity mmbe)) {
+                return "";
+            }
+            MetaMachine mm = mmbe.getMetaMachine();
+            if (mm instanceof IMultiPart part && part.getController() != null) {
+                mm = part.getController().self();
+            }
+            Level level = mm.getLevel();
+            BlockPos pos = mm.getPos();
+            if (level == null || pos == null) {
+                return "";
+            }
+            return level.dimension().location() + "#" + pos.asLong();
         } catch (Throwable t) {
             return "";
         }
