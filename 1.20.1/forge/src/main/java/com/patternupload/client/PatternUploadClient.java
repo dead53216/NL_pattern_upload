@@ -349,6 +349,12 @@ public final class PatternUploadClient {
     private static GTRecipeType crtVal;
     /** 本次樣板配方的電壓 tier（GTRecipeDefinition.tier，產物匹配定義取最小值）；-1＝未知（proxy 路徑等）。 */
     private static int crtTier = -1;
+    /**
+     * 本次樣板配方的**分類** registry path（{@code GTRecipeDefinition.recipeCategory}）；""＝未知／歧義／預設分類。
+     * 同一配方類型底下可再分「專屬分類」——魔力組裝（{@code mana_assembler}）就是 ASSEMBLER_RECIPES 的分類，
+     * 魔力組裝機與一般組裝機**型別完全相同**，只有分類分得出誰該做（1.28.0 排序用，不參與匹配判定）。
+     */
+    private static String crtCat = "";
 
     @Nullable
     static GTRecipeType currentRecipeType(AbstractContainerMenu menu) {
@@ -363,14 +369,16 @@ public final class PatternUploadClient {
         }
         GTRecipeType result = null;
         int tier = -1;
+        String cat = "";
         if (recipe != null && !recipe.isEmpty()) {
             ResourceLocation typeRl = ResourceLocation.tryParse(recipe.split("/")[0]);
             GTRecipeType type = typeRl == null ? null : GTRegistries.RECIPE_TYPES.get(typeRl);
             if (type != null) {
-                Integer t = matchingRecipeMinTier(menu, type);
-                if (t != null) {
+                RecipeMatch m = matchingRecipe(menu, type);
+                if (m != null) {
                     result = type;
-                    tier = t;
+                    tier = m.minTier();
+                    cat = m.categoryPath();
                 }
             }
         }
@@ -382,7 +390,17 @@ public final class PatternUploadClient {
         crtKey = key;
         crtVal = result;
         crtTier = tier;
+        crtCat = cat;
         return result;
+    }
+
+    /**
+     * 本次樣板配方的分類 registry path；""＝未知／歧義／預設分類（排序不受影響）。
+     * 呼叫前確保 {@link #currentRecipeType} 同一 menu 已算過（共用快取）。
+     */
+    static String currentRecipeCategory(AbstractContainerMenu menu) {
+        currentRecipeType(menu);
+        return crtCat;
     }
 
     /** 本次樣板配方的電壓 tier；-1＝未知。呼叫前確保 {@link #currentRecipeType} 同一 menu 已算過（共用快取）。 */
@@ -526,10 +544,13 @@ public final class PatternUploadClient {
      * 查 {@code GTRecipeType.recipes}（gtceu 同步到 client 的表）。
      * <p>
      * 回傳：null＝無配方匹配（非該機器／殘留）；否則所有匹配定義中最小的 {@code GTRecipeDefinition.tier}
-     *（同產物多條配方取最寬容值；電壓排序／自動直傳的電壓檢查用）。
+     *（同產物多條配方取最寬容值；電壓排序／自動直傳的電壓檢查用）＋**配方分類**（見 {@link RecipeMatch}）。
      */
+    /** 產物匹配結果：最小電壓 tier ＋ 分類 registry path（分類不唯一／預設＝""）。 */
+    private record RecipeMatch(int minTier, String categoryPath) {}
+
     @Nullable
-    private static Integer matchingRecipeMinTier(AbstractContainerMenu menu, GTRecipeType type) {
+    private static RecipeMatch matchingRecipe(AbstractContainerMenu menu, GTRecipeType type) {
         try {
             if (!(menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm)) {
                 return null;
@@ -550,7 +571,9 @@ public final class PatternUploadClient {
                 return null;
             }
             // 該類型任一配方的 item/fluid Outputs 命中任一產出物即算匹配；收所有匹配定義的最小 tier
+            // 與分類（分類不唯一＝同產物跨分類，保守回 "" 不影響排序）
             Integer best = null;
+            java.util.Set<String> cats = new java.util.HashSet<>();
             for (var def : type.recipes.values()) {
                 boolean hit = false;
                 for (var key : keys) {
@@ -573,11 +596,16 @@ public final class PatternUploadClient {
                         break;
                     }
                 }
-                if (hit && (best == null || def.tier < best)) {
-                    best = def.tier;
+                if (hit) {
+                    if (best == null || def.tier < best) {
+                        best = def.tier;
+                    }
+                    if (def.recipeCategory != null && def.recipeCategory.registryKey != null) {
+                        cats.add(def.recipeCategory.registryKey.getPath());
+                    }
                 }
             }
-            return best;
+            return best == null ? null : new RecipeMatch(best, cats.size() == 1 ? cats.iterator().next() : "");
         } catch (Throwable t) {
             return null; // 任何 API 異動/查不到 → 保守視為不匹配（改開面板讓玩家自選）
         }

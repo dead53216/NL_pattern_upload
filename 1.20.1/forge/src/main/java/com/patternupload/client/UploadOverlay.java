@@ -242,9 +242,19 @@ final class UploadOverlay {
             // 單趟預算：每 dest 只算一次 posKey/manual/suggestion/effective/tier/free，
             // 避免 comparator（sortTier）每次比較與 isSuggested 各自重呼 machineFor/suggestionFor。
             record Pre(ListBoxReflector.Dest dest, String posKey, GTRecipeType effective, boolean suggested,
-                       int tier, int free, String groupKey, int voltRank, int machineTier) {}
+                       int tier, int free, String groupKey, int voltRank, int machineTier, int catRank) {
+
+                /** 群組錨定鍵：同層＋同分類吻合度＋同機器的列聚在該群首見位置。 */
+                String groupOf() {
+                    return tier + "|" + catRank + "|" + groupKey;
+                }
+            }
             // 配方電壓 tier（GTRecipeDefinition.tier；-1 未知）：機器電壓對照排序／過濾用
             int recipeTier = current == null ? -1 : PatternUploadClient.currentRecipeTier(screen.getMenu());
+            // 配方分類（同類型底下再分，如 assembler 底下的 mana_assembler）：只影響排序，不影響匹配／直傳。
+            // 該類型無專屬分類（絕大多數機器）時 specialPaths 為空 → catRank 恆 1 → 排序與 1.27.0 完全相同。
+            String recipeCat = current == null ? "" : PatternUploadClient.currentRecipeCategory(screen.getMenu());
+            java.util.Set<String> specialCats = RecipeTypeIcons.specialCategoryPaths(current);
             List<Pre> pre = new ArrayList<>(destinations.size());
             for (var dest : destinations) {
                 String posKey = PatternUploadClient.posKeyFor(dest.index());
@@ -259,20 +269,28 @@ final class UploadOverlay {
                 // 配方電壓對應機器電壓：0 跑得動（機器 tier ≥ 配方 tier）→ 1 任一方未知 → 2 電壓不足（跑不動）
                 int mt = PatternUploadClient.tierIndexOf(PatternUploadClient.tierFor(dest.index()));
                 int voltRank = (recipeTier < 0 || mt < 0) ? 1 : (mt >= recipeTier ? 0 : 2);
+                // 分類吻合度：機器 id 取 伺服端回報的實際機器 ?? 清單 icon 物品（貼著的機器）
+                String machineId = PatternUploadClient.machineItemFor(dest.index());
+                if (machineId.isEmpty()) {
+                    machineId = itemIdOf(dest.icon());
+                }
+                int catRank = RecipeTypeIcons.categoryRank(machineId, recipeCat, specialCats);
                 pre.add(new Pre(dest, posKey, effective, suggested, tier, fr < 0 ? Integer.MAX_VALUE : fr,
-                        groupKey, voltRank, mt < 0 ? Integer.MAX_VALUE : mt));
+                        groupKey, voltRank, mt < 0 ? Integer.MAX_VALUE : mt, catRank));
             }
             if (current != null) {
-                pre.sort(Comparator.comparingInt(Pre::tier)); // 穩定排序，同層維持伺服端順序
+                // 穩定排序，同層維持伺服端順序；同層內先分「配方分類吻合度」——魔力組裝樣板讓魔力組裝機
+                // 在前、一般組裝機在後（反之亦然）。無專屬分類的類型 catRank 恆 1 → 這一鍵不產生任何差異。
+                pre.sort(Comparator.comparingInt(Pre::tier).thenComparingInt(Pre::catRank));
                 // 相同機器再依 電壓適配（跑得動→未知→不足）→ 機器電壓低→高（最貼近配方電壓者先，不佔高壓機）
-                // → 剩餘空格小→大（優先塞快滿的、樣板集中）。群組錨定在「該群同層首見位置」——
-                // 同機器列聚在一起，跨群與跨層仍維持上面 tier 排序後的相對順序（不亂跳）。
+                // → 剩餘空格小→大（優先塞快滿的、樣板集中）。群組錨定在「該群同層＋同分類吻合度首見位置」——
+                // 同機器列聚在一起，跨群與跨層仍維持上面排序後的相對順序（不亂跳）。
                 java.util.Map<String, Integer> groupFirst = new java.util.HashMap<>();
                 for (int i = 0; i < pre.size(); i++) {
-                    groupFirst.putIfAbsent(pre.get(i).tier() + "|" + pre.get(i).groupKey(), i);
+                    groupFirst.putIfAbsent(pre.get(i).groupOf(), i);
                 }
                 pre.sort(Comparator
-                        .comparingInt((Pre p) -> groupFirst.get(p.tier() + "|" + p.groupKey()))
+                        .comparingInt((Pre p) -> groupFirst.get(p.groupOf()))
                         .thenComparingInt(Pre::voltRank)
                         .thenComparingInt(Pre::machineTier)
                         .thenComparingInt(Pre::free));
@@ -326,6 +344,19 @@ final class UploadOverlay {
             }
         }
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - contentRows()));
+    }
+
+    /** 目的地 icon（AEKey＝供應器貼著的機器物品）的 registry id；非物品／取不到回 ""。 */
+    private static String itemIdOf(@org.jetbrains.annotations.Nullable AEKey key) {
+        try {
+            if (key instanceof appeng.api.stacks.AEItemKey ik) {
+                var rl = net.minecraftforge.registries.ForgeRegistries.ITEMS.getKey(ik.getItem());
+                return rl == null ? "" : rl.toString();
+            }
+        } catch (Throwable ignored) {
+            // 取不到 → 視為未知（分類排序不生效）
+        }
+        return "";
     }
 
     /** 額外資訊列 icon：群組 icon 物品 id → ItemStack；解析不到退樣板 icon。 */
