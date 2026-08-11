@@ -731,12 +731,49 @@ public final class PatternUploadClient {
                 return;
             }
             if (matches.size() > 1) {
-                LOGGER.info("[pattern_upload] {} matches → open panel for user choice", matches.size());
+                // 逐筆列出「是誰、憑什麼算吻合」——多個 match 一律開面板（1.24.0 嚴格唯一），
+                // 玩家常只認得其中一台，需靠這行定位另一個候選（判定來源＝手動指定／伺服端建議／
+                // icon 反查／名稱匹配，見 UploadOverlay.sortTier）。
+                LOGGER.info("[pattern_upload] {} matches → open panel for user choice; candidates: {}",
+                        matches.size(), describeMatches(matches, current));
             }
         }
         // 座標／建議已在 pending 期間請求過，此時已載入 → 面板直接顯示正確機器與排序
         overlay = new UploadOverlay(screen, dests, force);
         LOGGER.info("[pattern_upload] opened panel: {} entries", dests.size());
+    }
+
+    /**
+     * 多個明確匹配時的診斷字串：每筆「#index '標籤' via=判定來源 pos=座標鍵 tier=電壓 machine=機器物品 free=空格」。
+     * {@code via} 依 {@link UploadOverlay#sortTier} 的同一優先序回推（手動指定 → 伺服端建議 → icon 反查 →
+     * 名稱最長機器名），供「為什麼開面板／另一個候選是誰」的現場定位。
+     */
+    private static String describeMatches(List<ListBoxReflector.Dest> matches, GTRecipeType current) {
+        StringBuilder sb = new StringBuilder();
+        for (var d : matches) {
+            if (sb.length() > 0) {
+                sb.append(" | ");
+            }
+            String posKey = posKeyFor(d.index());
+            GTRecipeType manual = PatternUploadConfig.machineFor(posKey, d.name().getString());
+            GTRecipeType sug = manual != null ? null : usableSuggestionFor(d, current);
+            String via;
+            if (manual != null) {
+                via = "手動指定=" + manual.registryName;
+            } else if (sug != null) {
+                via = "伺服端建議=" + sug.registryName;
+            } else if (RecipeTypeIcons.typesForIcon(d.icon()) != null) {
+                via = "icon反查";
+            } else {
+                via = "名稱匹配";
+            }
+            sb.append('#').append(d.index()).append(" '").append(d.name().getString()).append("' via=").append(via)
+                    .append(" pos=").append(posKey == null ? "-" : posKey)
+                    .append(" tier=").append(tierFor(d.index()).isEmpty() ? "-" : tierFor(d.index()))
+                    .append(" machine=").append(machineItemFor(d.index()).isEmpty() ? "-" : machineItemFor(d.index()))
+                    .append(" free=").append(freeSlotsFor(d.index()));
+        }
+        return sb.toString();
     }
 
     // ------------------------------------------------------------- 事件疊加
