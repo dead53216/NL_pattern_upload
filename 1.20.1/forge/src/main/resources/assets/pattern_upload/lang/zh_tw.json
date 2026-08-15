@@ -19,5 +19,7 @@
   "pattern_upload.no_blank": "網路中沒有空白樣板，未上傳",
   "pattern_upload.no_machine": "未知機器",
   "pattern_upload.search": "搜尋…",
-  "pattern_upload.sent": "樣板已上傳：%s"
+  "pattern_upload.sent": "樣板已上傳：%s",
+  "pattern_upload.voltage_low": "電壓不足",
+  "pattern_upload.voltage_low.tooltip": "該機器電壓 %1$s 低於配方需求 %2$s，跑不動這張樣板（仍可手動上傳）"
 }

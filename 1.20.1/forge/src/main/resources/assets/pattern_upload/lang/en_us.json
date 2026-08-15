@@ -19,5 +19,7 @@
   "pattern_upload.no_blank": "No blank pattern in the network, nothing sent",
   "pattern_upload.no_machine": "Unknown machine",
   "pattern_upload.search": "Search…",
-  "pattern_upload.sent": "Pattern sent to: %s"
+  "pattern_upload.sent": "Pattern sent to: %s",
+  "pattern_upload.voltage_low": "Voltage too low",
+  "pattern_upload.voltage_low.tooltip": "Machine tier %1$s is below the recipe's %2$s, it cannot run this pattern (manual upload still allowed)"
 }

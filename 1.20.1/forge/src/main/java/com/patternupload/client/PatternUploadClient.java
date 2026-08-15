@@ -735,11 +735,16 @@ public final class PatternUploadClient {
         if (current != null) {
             int recipeTier = currentRecipeTier(screen.getMenu());
             List<ListBoxReflector.Dest> matches = new java.util.ArrayList<>();
+            List<ListBoxReflector.Dest> voltageBlocked = new java.util.ArrayList<>();
             for (var d : dests) {
                 int tier = UploadOverlay.sortTier(d, current);
                 // 電壓不足（機器 tier < 配方 tier）不算明確匹配：不自動直傳到跑不動的機器（未知電壓寬容放行）
-                if ((tier == 0 || tier == 1) && voltageOk(d.index(), recipeTier)) {
-                    matches.add(d);
+                if (tier == 0 || tier == 1) {
+                    if (voltageOk(d.index(), recipeTier)) {
+                        matches.add(d);
+                    } else {
+                        voltageBlocked.add(d); // 機器類型吻合但電壓判定跑不動 → 記下來供診斷
+                    }
                 }
             }
             // 嚴格唯一（1.24.0）：match 多於一個一律開面板讓玩家選，不自動直傳。
@@ -777,13 +782,34 @@ public final class PatternUploadClient {
                                 : "single type match");
                 return;
             }
+            // 沒能直傳時一律說明「為什麼」——這類「明明只有一台卻不自動上傳」的疑問全靠這幾行定位。
             if (matches.size() > 1) {
                 // 逐筆列出「是誰、憑什麼算吻合」——多個 match 一律開面板（1.24.0 嚴格唯一），
                 // 玩家常只認得其中一台，需靠這行定位另一個候選（判定來源＝手動指定／伺服端建議／
                 // icon 反查／名稱匹配，見 UploadOverlay.sortTier）。
                 LOGGER.info("[pattern_upload] {} matches → open panel for user choice; candidates: {}",
                         matches.size(), describeMatches(matches, current));
+            } else if (single != null) {
+                // 唯一匹配卻沒直傳＝被 extras 押制（網路上已有這張樣板，見上方分支）
+                LOGGER.info("[pattern_upload] single match '{}' suppressed: pattern already exists in {} provider(s) "
+                        + "→ open panel", single.name().getString(), extraDests().size());
+            } else if (!voltageBlocked.isEmpty()) {
+                // 機器類型吻合但被電壓判定排除 → 印配方 tier 與各機器電壓，辨別是真跑不動還是判定過嚴
+                LOGGER.info("[pattern_upload] no match: {} type-matching dest(s) excluded by voltage "
+                        + "(recipe tier {} = {}); {} → open panel",
+                        voltageBlocked.size(), recipeTier,
+                        recipeTier >= 0 && recipeTier < com.gregtechceu.gtceu.api.GTValues.VN.length
+                                ? com.gregtechceu.gtceu.api.GTValues.VN[recipeTier] : "?",
+                        describeMatches(voltageBlocked, current));
+            } else {
+                LOGGER.info("[pattern_upload] no explicit match for recipe type '{}' (recipe tier {}) → open panel",
+                        current.registryName, recipeTier);
             }
+        } else if (!force) {
+            // 配方類型判不出（gtocore$recipe 空／殘留對不上／產物在該類型配方表裡找不到）→ 完全不走
+            // 自動直傳判定。印出殘留欄位與產物簽章，直接看得出是哪一種。
+            LOGGER.info("[pattern_upload] recipe type unknown (gtocore$recipe='{}', outputs='{}') → open panel",
+                    readGtoRecipe(screen.getMenu()), outputSignature(screen.getMenu()));
         }
         // 座標／建議已在 pending 期間請求過，此時已載入 → 面板直接顯示正確機器與排序
         overlay = new UploadOverlay(screen, dests, force);

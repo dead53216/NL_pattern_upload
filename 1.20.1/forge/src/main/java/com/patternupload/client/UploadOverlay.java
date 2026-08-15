@@ -94,7 +94,7 @@ final class UploadOverlay {
 
     private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type,
                        String providerName, @org.jetbrains.annotations.Nullable String posKey, boolean suggested,
-                       boolean hasRecipe) {
+                       boolean hasRecipe, boolean voltageLow) {
 
         /** 不可上傳（視同滿槽的行為門檻）：真滿槽，或已有本次編碼的樣板（上傳會被 GTO 忽略）。 */
         boolean blocked() {
@@ -237,7 +237,7 @@ final class UploadOverlay {
                 ItemStack icon = actual != null ? actual
                         : sugType != null ? RecipeTypeIcons.icon(sugType) : iconFromId(ex.iconId());
                 rows.add(new Row(icon, null, display, false, EXTRA_ROW, sugType,
-                        machineKnown ? label : "", null, machineKnown, true));
+                        machineKnown ? label : "", null, machineKnown, true, false));
             }
             // 單趟預算：每 dest 只算一次 posKey/manual/suggestion/effective/tier/free，
             // 避免 comparator（sortTier）每次比較與 isSuggested 各自重呼 machineFor/suggestionFor。
@@ -329,28 +329,32 @@ final class UploadOverlay {
                     continue;
                 }
                 boolean hasRecipe = PatternUploadClient.hasRecipeFor(dest.index());
+                // 電壓不足（機器 tier < 配方 tier，voltRank 2）：仍列出、仍可手動上傳，但標記出來——
+                // 自動直傳會排除它們，不標的話玩家只看到「沒自動上傳」卻不知原因。
+                boolean voltageLow = p.voltRank() == 2;
                 if (machineShown) {
                     // 機器名顏色：手動指定＝白；伺服端建議與改名救援＝青（自動判定，可手動覆寫）
                     rows.add(new Row(actual != null ? actual : RecipeTypeIcons.icon(assigned), null, display,
                             dest.full(), dest.index(), assigned, providerName, p.posKey(),
-                            p.suggested() || assigned == null, hasRecipe));
+                            p.suggested() || assigned == null, hasRecipe, voltageLow));
                 } else {
                     rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName,
-                            p.posKey(), false, hasRecipe));
+                            p.posKey(), false, hasRecipe, voltageLow));
                 }
             }
         } else {
             if (filter.isEmpty() && PatternUploadConfig.machineFor(selectingPosKey, selectingName) != null) {
                 rows.add(new Row(RecipeTypeIcons.patternIcon(), null,
                         Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null, "", null, false,
-                        false));
+                        false, false));
             }
             for (GTRecipeType type : RecipeTypeIcons.allTypes()) {
                 Component name = RecipeTypeIcons.name(type);
                 if (!PinyinMatch.matches(name.getString(), filter)) {
                     continue;
                 }
-                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, "", null, false, false));
+                rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, "", null, false, false,
+                        false));
             }
         }
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - contentRows()));
@@ -621,6 +625,10 @@ final class UploadOverlay {
                 if (row.hasRecipe()) {
                     tail = Component.translatable("pattern_upload.has_recipe").getString();
                     tailColor = 0xCC9944;
+                } else if (row.voltageLow()) {
+                    // 電壓不足優先於剩餘格顯示：這是阻斷性資訊（機器跑不動、自動直傳會跳過它）
+                    tail = Component.translatable("pattern_upload.voltage_low").getString();
+                    tailColor = 0xDD5555;
                 } else {
                     int freeN = PatternUploadClient.freeSlotsFor(row.destIndex());
                     if (freeN >= 0) {
@@ -691,6 +699,14 @@ final class UploadOverlay {
                     g.renderTooltip(font, Component.translatable("pattern_upload.assign.tooltip"), mouseX, mouseY);
                 } else if (rows.get(idx).hasRecipe()) {
                     g.renderTooltip(font, Component.translatable("pattern_upload.has_recipe.tooltip"), mouseX, mouseY);
+                } else if (rows.get(idx).voltageLow()) {
+                    // 標出實際落差：機器電壓 vs 配方需求電壓（玩家據此決定換機器或手動硬傳）
+                    String mv = PatternUploadClient.tierFor(rows.get(idx).destIndex());
+                    int rt = PatternUploadClient.currentRecipeTier(screen.getMenu());
+                    String rv = rt >= 0 && rt < com.gregtechceu.gtceu.api.GTValues.VN.length
+                            ? com.gregtechceu.gtceu.api.GTValues.VN[rt] : "?";
+                    g.renderTooltip(font, Component.translatable("pattern_upload.voltage_low.tooltip",
+                            mv.isEmpty() ? "?" : mv, rv), mouseX, mouseY);
                 } else if (rows.get(idx).full()) {
                     g.renderTooltip(font, Component.translatable("pattern_upload.full.tooltip"), mouseX, mouseY);
                 }
