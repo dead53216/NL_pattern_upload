@@ -74,6 +74,9 @@ public final class PatternUploadClient {
     /** 各目的地所服務機器的身分鍵（{@code <dim>#<packedLong>}，多方塊為控制器座標；空＝判不出）。 */
     @Nullable
     private static String[] posMachineKey = null;
+    /** 各目的地**容器自身**的種類（樣板總成家族＝其機器物品 id；AE2 供應器＝""）。 */
+    @Nullable
+    private static String[] posContainerKind = null;
     /** 各目的地建議機器的電壓等級名（GTValues.VN 如 "LV"，照 index 對齊；空字串＝未知）。 */
     @Nullable
     private static String[] posTier = null;
@@ -116,6 +119,7 @@ public final class PatternUploadClient {
         posSugMachine = null;
         posExtraMachine = null;
         posMachineKey = null;
+        posContainerKind = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -139,6 +143,7 @@ public final class PatternUploadClient {
         posSugMachine = msg.sugMachine();
         posExtraMachine = msg.extraMachine();
         posMachineKey = msg.machineKey();
+        posContainerKind = msg.containerKind();
         LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
         if (pendingDests != null) {
             decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板
@@ -263,6 +268,15 @@ public final class PatternUploadClient {
     static String machineKeyFor(int index) {
         String[] m = posMachineKey;
         return (m == null || index < 0 || index >= m.length || m[index] == null) ? "" : m[index];
+    }
+
+    /**
+     * 第 index 個目的地**容器自身**的種類（樣板總成家族＝其機器物品 id；AE2 供應器／舊伺服端＝""）。
+     * 同一台機器上的 ME 樣板總成與 ME 催化劑樣板總成機器身分相同但能力不等價，靠這個分辨。
+     */
+    static String containerKindFor(int index) {
+        String[] k = posContainerKind;
+        return (k == null || index < 0 || index >= k.length || k[index] == null) ? "" : k[index];
     }
 
     /** 第 i 個 extras 的實際機器物品 id；未知回 ""。 */
@@ -841,10 +855,14 @@ public final class PatternUploadClient {
             return null; // 機器身分判不出 → 不敢視為同一台
         }
         String mode = suggestRawFor(matches.get(0).index());
+        String kind = containerKindFor(matches.get(0).index());
         GTRecipeType manual0 = manualMachineFor(matches.get(0));
         for (var d : matches) {
             if (!machineKey.equals(machineKeyFor(d.index()))
                     || !mode.equals(suggestRawFor(d.index()))
+                    // 容器種類不同＝能力不等價（同機的 ME 樣板總成 vs ME 催化劑樣板總成：催化劑總成
+                    // 不消耗催化劑耐久、能做一般總成的事，反之不行）→ 送誰結果不同，不可合併
+                    || !kind.equals(containerKindFor(d.index()))
                     || manualMachineFor(d) != manual0) {
                 return null;
             }
@@ -905,6 +923,7 @@ public final class PatternUploadClient {
                     // 機器身分鍵與建議原字串：合併未生效時，一眼看出是「不同台機器」還是「同台不同模式」
                     .append(" mkey=").append(machineKeyFor(d.index()).isEmpty() ? "-" : machineKeyFor(d.index()))
                     .append(" mode=").append(suggestRawFor(d.index()).isEmpty() ? "-" : suggestRawFor(d.index()))
+                    .append(" kind=").append(containerKindFor(d.index()).isEmpty() ? "-" : containerKindFor(d.index()))
                     .append(" free=").append(freeSlotsFor(d.index()));
         }
         return sb.toString();

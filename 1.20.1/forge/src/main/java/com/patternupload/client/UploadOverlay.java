@@ -94,11 +94,19 @@ final class UploadOverlay {
 
     private record Row(ItemStack icon, AEKey key, Component name, boolean full, int destIndex, GTRecipeType type,
                        String providerName, @org.jetbrains.annotations.Nullable String posKey, boolean suggested,
-                       boolean hasRecipe, boolean voltageLow) {
+                       boolean hasRecipe, boolean voltageLow, String subLabel) {
 
         /** 不可上傳（視同滿槽的行為門檻）：真滿槽，或已有本次編碼的樣板（上傳會被 GTO 忽略）。 */
         boolean blocked() {
             return full || hasRecipe;
+        }
+
+        /**
+         * 第二行括號裡顯示的字：優先用副標（樣板總成家族＝容器自身名稱，如「ME催化劑樣板總成」——
+         * GTO 標籤對這類容器一律顯示**控制器**機器名，同機的兩種總成看起來完全一樣），否則用原標籤。
+         */
+        String label() {
+            return subLabel.isEmpty() ? providerName : subLabel;
         }
     }
 
@@ -237,7 +245,7 @@ final class UploadOverlay {
                 ItemStack icon = actual != null ? actual
                         : sugType != null ? RecipeTypeIcons.icon(sugType) : iconFromId(ex.iconId());
                 rows.add(new Row(icon, null, display, false, EXTRA_ROW, sugType,
-                        machineKnown ? label : "", null, machineKnown, true, false));
+                        machineKnown ? label : "", null, machineKnown, true, false, ""));
             }
             // 單趟預算：每 dest 只算一次 posKey/manual/suggestion/effective/tier/free，
             // 避免 comparator（sortTier）每次比較與 isSuggested 各自重呼 machineFor/suggestionFor。
@@ -275,6 +283,12 @@ final class UploadOverlay {
                     machineId = itemIdOf(dest.icon());
                 }
                 int catRank = RecipeTypeIcons.categoryRank(machineId, recipeCat, specialCats);
+                // 容器種類納入群組鍵：同一台機器上的 ME 樣板總成與 ME 催化劑樣板總成分成兩群
+                //（能力不等價，不该混在同一群按剩餘空格互相穿插）
+                String kind = PatternUploadClient.containerKindFor(dest.index());
+                if (!kind.isEmpty()) {
+                    groupKey = groupKey + '|' + kind;
+                }
                 pre.add(new Pre(dest, posKey, effective, suggested, tier, fr < 0 ? Integer.MAX_VALUE : fr,
                         groupKey, voltRank, mt < 0 ? Integer.MAX_VALUE : mt, catRank));
             }
@@ -315,6 +329,9 @@ final class UploadOverlay {
                 if (assigned == null && actual == null) {
                     actual = renamedIconMachine(dest, providerName);
                 }
+                // 樣板總成家族：GTO 標籤顯示的是**控制器**機器名，同一台機器上的一般總成與催化劑總成
+                // 看起來完全一樣 → 第二行改放容器自身名稱（「ME催化劑樣板總成」等），一眼分得出。
+                String subLabel = containerName(PatternUploadClient.containerKindFor(dest.index()));
                 boolean machineShown = assigned != null || actual != null;
                 if (machineShown) {
                     // 已判定機器：icon 換成該機器；第一行放「機器名＋電壓」，原標籤（改名後的自訂名）換行放括號裡（見 render）。
@@ -324,6 +341,9 @@ final class UploadOverlay {
                             + (tier.isEmpty() ? "" : " " + tier);
                     display = Component.literal(machineName);
                     filterText = machineName + " (" + providerName + ")";
+                }
+                if (!subLabel.isEmpty()) {
+                    filterText = filterText + " " + subLabel; // 搜尋「催化劑」也找得到
                 }
                 if (!PinyinMatch.matches(filterText, filter)) {
                     continue;
@@ -336,17 +356,17 @@ final class UploadOverlay {
                     // 機器名顏色：手動指定＝白；伺服端建議與改名救援＝青（自動判定，可手動覆寫）
                     rows.add(new Row(actual != null ? actual : RecipeTypeIcons.icon(assigned), null, display,
                             dest.full(), dest.index(), assigned, providerName, p.posKey(),
-                            p.suggested() || assigned == null, hasRecipe, voltageLow));
+                            p.suggested() || assigned == null, hasRecipe, voltageLow, subLabel));
                 } else {
                     rows.add(new Row(null, dest.icon(), display, dest.full(), dest.index(), null, providerName,
-                            p.posKey(), false, hasRecipe, voltageLow));
+                            p.posKey(), false, hasRecipe, voltageLow, subLabel));
                 }
             }
         } else {
             if (filter.isEmpty() && PatternUploadConfig.machineFor(selectingPosKey, selectingName) != null) {
                 rows.add(new Row(RecipeTypeIcons.patternIcon(), null,
                         Component.translatable("pattern_upload.assign.clear"), false, CLEAR_ROW, null, "", null, false,
-                        false, false));
+                        false, false, ""));
             }
             for (GTRecipeType type : RecipeTypeIcons.allTypes()) {
                 Component name = RecipeTypeIcons.name(type);
@@ -354,7 +374,7 @@ final class UploadOverlay {
                     continue;
                 }
                 rows.add(new Row(RecipeTypeIcons.icon(type), null, name, false, -1, type, "", null, false, false,
-                        false));
+                        false, ""));
             }
         }
         scrollOff = Math.max(0, Math.min(scrollOff, rows.size() - contentRows()));
@@ -388,6 +408,19 @@ final class UploadOverlay {
             return stack;
         } catch (Throwable ignored) {
             return null; // 任何異常 → 維持原顯示
+        }
+    }
+
+    /** 容器種類（機器物品 id）→ 本地化名稱（如「ME催化劑樣板總成」）；空／解析不到回 ""。 */
+    private static String containerName(String kindId) {
+        try {
+            if (kindId.isEmpty()) {
+                return "";
+            }
+            ItemStack st = PatternUploadClient.machineItemStack(kindId);
+            return st == null ? "" : st.getHoverName().getString();
+        } catch (Throwable ignored) {
+            return "";
         }
     }
 
@@ -649,8 +682,8 @@ final class UploadOverlay {
                     && !row.providerName().isEmpty()) {
                 // 已判定機器：第一行機器名，第二行括號放（改名後的）原標籤；「通用工廠 - 子機器」只留子機器。
                 // 機器名顏色：手動指定＝白；伺服端建議（接口→存儲總線自動解析）＝青色標示，可分辨並提醒可手動覆寫。
-                String[] pf = splitFactoryName(row.providerName());
-                String label = pf != null ? pf[1] : row.providerName();
+                String[] pf = splitFactoryName(row.label());
+                String label = pf != null ? pf[1] : row.label();
                 int nameColor = row.blocked() ? 0x777777 : (row.suggested() ? 0x66CCFF : color);
                 g.drawString(font, font.plainSubstrByWidth(row.name().getString() + fullTag, nameW), x + 21, ry + 1, nameColor);
                 g.drawString(font, font.plainSubstrByWidth("(" + label + ")", nameW), x + 21, ry + 9, 0x999999);
