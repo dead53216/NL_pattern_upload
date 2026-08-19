@@ -159,6 +159,11 @@ public final class Network {
      * 人在 EMI 配方頁時整包被丟掉），故清單本身改由本 mod 伺服端一併回報——索引與
      * {@code gto$currentContainers} 同序，正好等同 GTO 送的那份。
      * <p>
+     * {@code accept}（1.35.0）＝**GTOCore 自己的收下條件**：`!isOutOfService() &&
+     * getTerminalPatternInventory().simulateAdd(本次樣板).isEmpty()`——與 `gtolib$sendPattern` 內部
+     * 判定同一支。它為 false 時伺服端會**靜默不做事**（GTO 那支有五條靜默 return），客戶端卻照樣
+     * 顯示「已上傳」→ 假成功。故先問清楚，別送給收不下的。
+     * <p>
      * {@code containerKind}（1.31.0）是**尾綴欄位**（協定號不變）：encode 依序寫在
      * 原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——舊伺服端沒寫 → 該段取預設（-1／false／空表／""）；
      * 舊客戶端不讀 → 剩餘 bytes 被丟棄無害。兩側版本不齊皆退預設值，不斷線、不炸包。
@@ -167,7 +172,8 @@ public final class Network {
     public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest, int[] free,
                            boolean[] hasRecipe, List<Extra> extras, String[] tier, String[] sugMachine,
                            String[] extraMachine, String[] machineKey, String[] containerKind,
-                           net.minecraft.network.chat.Component[] name, String[] iconId, boolean[] full) {
+                           net.minecraft.network.chat.Component[] name, String[] iconId, boolean[] full,
+                           boolean[] accept) {
 
         /** 被 GTO 藏掉的「已有該配方」供應器：GTOCore 群組標籤名、群組 icon 物品 id、建議機器、剩餘格。 */
         public record Extra(String name, String iconId, String suggest, int free) {}
@@ -216,6 +222,9 @@ public final class Network {
                 b.writeComponent(m.name[i] == null ? net.minecraft.network.chat.Component.empty() : m.name[i]);
                 b.writeUtf(m.iconId[i] == null ? "" : m.iconId[i]);
                 b.writeBoolean(m.full[i]);
+            }
+            for (int i = 0; i < m.packed.length; i++) {
+                b.writeBoolean(m.accept[i]);
             }
         }
 
@@ -300,8 +309,15 @@ public final class Network {
                     full[i] = b.readBoolean();
                 }
             }
+            boolean[] accept = new boolean[n];
+            java.util.Arrays.fill(accept, true); // 舊伺服端沒回 → 一律當收得下（不改變舊行為）
+            if (b.isReadable()) {
+                for (int i = 0; i < n; i++) {
+                    accept[i] = b.readBoolean();
+                }
+            }
             return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe, extras, tier, sugMachine, extraMachine,
-                    machineKey, containerKind, name, iconId, full);
+                    machineKey, containerKind, name, iconId, full, accept);
         }
     }
 
@@ -338,6 +354,9 @@ public final class Network {
             net.minecraft.network.chat.Component[] name = new net.minecraft.network.chat.Component[n];
             String[] iconId = new String[n];
             boolean[] full = new boolean[n];
+            boolean[] accept = new boolean[n];
+            // 本次編碼的樣板本體：GTO 收不收得下就是拿它去 simulateAdd（與 gtolib$sendPattern 同一支判定）
+            ItemStack patternStack = readPatternStack(menu);
             // 本次編碼樣板的主產物（GTO 上傳去重同款判定：mixin 暫存 gto$patternStack → decode → primaryOutput）
             AEKey primaryOut = primaryOutputOfEncoding(menu, player.level());
             // request 範圍內以子網 grid 為鍵快取建議機器＋電壓：多個供應器橋接同一子網時只掃一次
@@ -352,6 +371,7 @@ public final class Network {
                 containerKind[i] = containerKindOf(o);
                 name[i] = net.minecraft.network.chat.Component.empty();
                 iconId[i] = "";
+                accept[i] = true;
                 free[i] = -1;
                 if (o instanceof IExtendedPatternContainer c) {
                     // 清單本體（1.33.0）：GTO 送給客戶端清單框的同一份標籤／icon（同一支 getTerminalGroup）
@@ -375,6 +395,7 @@ public final class Network {
                     // 非 AE2 供應器、無 IPPPC mixin）也涵蓋。
                     free[i] = countFreePatternSlots(c);
                     full[i] = free[i] == 0; // 樣板槽零空位＝GTO 清單的「滿」
+                    accept[i] = acceptsPattern(c, patternStack);
                     hasRecipe[i] = primaryOut != null && containsPrimaryOutput(c, primaryOut, player.level());
                     if (c instanceof IExtendedPatternContainer.IPPPC ippc) {
                         Level level = ippc.gto$getLevel();
@@ -414,7 +435,8 @@ public final class Network {
                             gridCache, extraMachine);
             CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
                     new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe, extras, tier, sugMachine,
-                            extraMachine.toArray(new String[0]), machineKey, containerKind, name, iconId, full));
+                            extraMachine.toArray(new String[0]), machineKey, containerKind, name, iconId, full,
+                            accept));
         });
         ctx.setPacketHandled(true);
     }
@@ -432,6 +454,23 @@ public final class Network {
      * {@code gto$currentContainers} 同批），解碼走 AE2 公開 API {@link PatternDetailsHelper#decodePattern}。
      */
     @Nullable
+    /**
+     * 這個容器收不收得下本次的樣板——**照抄 GTOCore `gtolib$sendPattern` 的前置判定**
+     *（`isOutOfService()` 與 `getTerminalPatternInventory().simulateAdd(pattern).isEmpty()`）。
+     * 不合就是伺服端靜默不做事，客戶端不該再顯示「已上傳」。
+     * 樣板取不到（判不出）→ 回 true，不擋（維持舊行為）。
+     */
+    private static boolean acceptsPattern(IExtendedPatternContainer c, @Nullable ItemStack pattern) {
+        if (pattern == null || pattern.isEmpty()) {
+            return true;
+        }
+        try {
+            return !c.isOutOfService() && c.getTerminalPatternInventory().simulateAdd(pattern).isEmpty();
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
     private static AEKey primaryOutputOfEncoding(AbstractContainerMenu menu, Level level) {
         try {
             ItemStack pattern = readPatternStack(menu);

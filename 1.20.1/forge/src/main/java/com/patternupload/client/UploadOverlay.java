@@ -485,7 +485,8 @@ final class UploadOverlay {
         if (PatternUploadClient.hasRecipeFor(d.index())) {
             return -1; // 已有該配方：置頂（與被 GTO 藏掉的額外列同區）
         }
-        if (d.full()) {
+        if (d.full() || !PatternUploadClient.acceptFor(d.index())) {
+            // 收不下（滿／容器停用／樣板庫存拒收，伺服端以 GTO 自己的判定回報）→ 沉底、不算明確匹配
             return 5;
         }
         if (effective != null) {
@@ -902,15 +903,18 @@ final class UploadOverlay {
                         return true;
                     }
                     ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(row.destIndex());
+                    // 目標顯示名（聊天欄與上傳結果驗證共用同一份）
+                    var dest = destinations.stream()
+                            .filter(dd -> dd.index() == row.destIndex()).findFirst().orElse(null);
+                    Component sentName = dest != null
+                            ? PatternUploadClient.sentDisplayName(dest, row.type())
+                            : ((row.type() != null && !row.providerName().isEmpty())
+                                    ? Component.literal(row.name().getString() + " (" + row.providerName() + ")")
+                                    : row.name());
+                    // 送出後驗證：GTO 的 sendPattern 失敗是靜默的，沒生效要照實回報
+                    PatternUploadClient.armVerify(screen.getMenu(), row.destIndex(), sentName);
                     if (player != null) {
                         // 與自動上傳一致：手動選擇上傳也在聊天欄回報，目標優先報機器（sentDisplayName 統一格式）。
-                        var dest = destinations.stream()
-                                .filter(dd -> dd.index() == row.destIndex()).findFirst().orElse(null);
-                        Component sentName = dest != null
-                                ? PatternUploadClient.sentDisplayName(dest, row.type())
-                                : ((row.type() != null && !row.providerName().isEmpty())
-                                        ? Component.literal(row.name().getString() + " (" + row.providerName() + ")")
-                                        : row.name());
                         player.displayClientMessage(
                                 Component.translatable("pattern_upload.sent", sentName), false);
                     }

@@ -22,6 +22,7 @@
   "pattern_upload.has_recipe.tooltip": "该目的地已有相同产物的样板（上传会被忽略）",
   "pattern_upload.no_blank": "网络中没有空白样板，未上传",
   "pattern_upload.no_machine": "未知机器",
+  "pattern_upload.not_applied": "上传未生效：%s（目的地没收下，可能已满、已有同产物样板或容器停用）",
   "pattern_upload.search": "搜索…",
   "pattern_upload.sent": "样板已上传：%s",
   "pattern_upload.voltage_low": "电压不足",

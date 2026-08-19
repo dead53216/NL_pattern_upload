@@ -98,6 +98,28 @@ public final class PatternUploadClient {
     private static String[] posIconId = null;
     @Nullable
     private static boolean[] posFull = null;
+    /**
+     * 各目的地**收不收得下本次樣板**（1.35.0）：伺服端照 GTOCore `gtolib$sendPattern` 自己的前置判定算
+     *（`!isOutOfService() && simulateAdd(樣板).isEmpty()`）。false＝送過去伺服端會靜默不做事，
+     * 不能算明確匹配、也不能顯示「已上傳」。舊伺服端沒回 → 全 true（維持舊行為）。
+     */
+    @Nullable
+    private static boolean[] posAccept = null;
+
+    /**
+     * 上傳結果驗證（1.35.0）：GTO 的 `gtolib$sendPattern` 有**五條靜默 return**
+     *（無 grid／清單為空／index 越界／容器停用／樣板為 null／收不下／抽不到空白樣板），
+     * 客戶端無從得知，過去一律報「已上傳」＝可能假成功。故送出後隔幾 tick 再問伺服端一次：
+     * 該目的地是不是**真的有了**這張樣板（`hasRecipe`）；沒有就照實說。
+     */
+    @Nullable
+    private static AbstractContainerMenu verifyMenu = null;
+    private static int verifyIndex = -1;
+    @Nullable
+    private static net.minecraft.network.chat.Component verifyName = null;
+    private static int verifyGen = -1;
+    private static int verifyTicks = -1;
+    private static final int VERIFY_DELAY_TICKS = 4;
 
     /**
      * 延遲決策：處理樣板的「自動直傳 vs 開面板」決策延到伺服端座標／建議回來再判。
@@ -178,6 +200,7 @@ public final class PatternUploadClient {
         posName = null;
         posIconId = null;
         posFull = null;
+        posAccept = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -205,7 +228,12 @@ public final class PatternUploadClient {
         posName = msg.name();
         posIconId = msg.iconId();
         posFull = msg.full();
+        posAccept = msg.accept();
         LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
+        if (verifyGen != -1 && msg.gen() == verifyGen) {
+            checkVerify(msg);
+            return; // 這批是上傳結果驗證用的回覆，不參與決策／面板刷新
+        }
         if (pendingDests != null || pendingFromReply) {
             decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板（EMI 路徑清單也在這批裡）
         } else if (overlay != null) {
@@ -305,6 +333,55 @@ public final class PatternUploadClient {
     }
 
     /** 第 index 個目的地是否已有本次編碼樣板（主產物相同）；未知（舊伺服端／沒回）回 false。 */
+    /** 第 index 個目的地收不收得下本次樣板（伺服端以 GTO 自己的判定回報）。判不出／舊伺服端 → true。 */
+    static boolean acceptFor(int index) {
+        boolean[] a = posAccept;
+        return a == null || index < 0 || index >= a.length || a[index];
+    }
+
+    /**
+     * 送出一張樣板後掛上驗證：{@link #VERIFY_DELAY_TICKS} tick 後再問伺服端一次，
+     * 確認該目的地真的有了這張樣板；沒有就在聊天欄照實回報（不謊報成功）。
+     */
+    static void armVerify(AbstractContainerMenu menu, int index, net.minecraft.network.chat.Component name) {
+        verifyMenu = menu;
+        verifyIndex = index;
+        verifyName = name;
+        verifyGen = -1;
+        verifyTicks = VERIFY_DELAY_TICKS;
+    }
+
+    private static void clearVerify() {
+        verifyMenu = null;
+        verifyIndex = -1;
+        verifyName = null;
+        verifyGen = -1;
+        verifyTicks = -1;
+    }
+
+    private static void checkVerify(Network.ReplyS2C msg) {
+        int idx = verifyIndex;
+        var name = verifyName;
+        clearVerify();
+        boolean[] has = msg.hasRecipe();
+        if (idx < 0 || has == null || idx >= has.length) {
+            return; // 清單變了（重新編碼／換樣板）→ 無從驗證，不誤報
+        }
+        if (has[idx]) {
+            return; // 目的地已有這張樣板＝真的上傳成功
+        }
+        int free = msg.free() != null && idx < msg.free().length ? msg.free()[idx] : -1;
+        boolean accept = msg.accept() == null || idx >= msg.accept().length || msg.accept()[idx];
+        var player = Minecraft.getInstance().player;
+        if (player != null) {
+            player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                    "pattern_upload.not_applied", name == null
+                            ? net.minecraft.network.chat.Component.empty() : name), false);
+        }
+        LOGGER.warn("[pattern_upload] upload did NOT take effect at #{} '{}' (free={}, accept={}) — "
+                + "GTO sendPattern returned silently", idx, name == null ? "?" : name.getString(), free, accept);
+    }
+
     static boolean hasRecipeFor(int index) {
         boolean[] h = posHasRecipe;
         return h != null && index >= 0 && index < h.length && h[index];
@@ -862,7 +939,8 @@ public final class PatternUploadClient {
         for (var d : dests) {
             if (RecipeTypeIcons.isCraftContainer(d.icon())) {
                 sawCraftContainer = true;
-                if (!d.full()) {
+                // 收不下的（滿／容器停用／樣板庫存拒收）一律跳過：送過去伺服端只會靜默不做事
+                if (!d.full() && acceptFor(d.index())) {
                     target = d;
                     break;
                 }
@@ -877,6 +955,7 @@ public final class PatternUploadClient {
             LOGGER.info("[pattern_upload] craft: no blank pattern in network, aborted");
         } else if (target != null) {
             ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
+            armVerify(screen.getMenu(), target.index(), sentDisplayName(target, null));
             if (player != null) {
                 // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）；目標優先報機器（icon 物品名）
                 player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
@@ -983,6 +1062,8 @@ public final class PatternUploadClient {
                     return;
                 }
                 ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
+                armVerify(screen.getMenu(), target.index(), sentDisplayName(target,
+                        effectiveMachineFor(target, current) != null ? effectiveMachineFor(target, current) : current));
                 if (player != null) {
                     // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）。
                     // 目標優先報機器：有效機器（手動指定/建議）優先，無則用樣板類型 current（本分支必非 null，
@@ -1328,6 +1409,7 @@ public final class PatternUploadClient {
         if (event.getScreen() instanceof PatternEncodingTermScreen<?>) {
             forcePanel = false;
             clearEmiRecipe();
+            clearVerify();
             // 放棄尚未決策的 pending（終端已關）
             pendingScreen = null;
             pendingHost = null;
@@ -1382,6 +1464,11 @@ public final class PatternUploadClient {
         // 決策逾時：伺服端沒回座標／建議（沒裝本 mod）→ 到期用現有資料（無建議）決策，維持舊行為
         if (pendingWaitTicks >= 0 && --pendingWaitTicks < 0) {
             decidePending();
+        }
+        // 上傳結果驗證：等伺服端把樣板寫進去（並讓 hasRecipe 反映出來）後再查一次
+        if (verifyTicks >= 0 && --verifyTicks < 0 && verifyMenu != null) {
+            requestPositionsFor(verifyMenu);
+            verifyGen = posGen;
         }
         if (testPending < 0) {
             return;

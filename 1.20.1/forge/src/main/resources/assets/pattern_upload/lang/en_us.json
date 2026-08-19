@@ -22,6 +22,7 @@
   "pattern_upload.has_recipe.tooltip": "This destination already has a pattern with the same output (upload would be ignored)",
   "pattern_upload.no_blank": "No blank pattern in the network, nothing sent",
   "pattern_upload.no_machine": "Unknown machine",
+  "pattern_upload.not_applied": "Upload did not take effect: %s (destination refused it — full, already has this output, or offline)",
   "pattern_upload.search": "Search…",
   "pattern_upload.sent": "Pattern sent to: %s",
   "pattern_upload.voltage_low": "Voltage too low",
