@@ -40,6 +40,15 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   - **聊天欄回報目標優先報機器（1.17.1，`sentDisplayName` 統一格式）**：「機器名 (供應器標籤)」——
     機器取 有效機器（手動指定/建議）?? 樣板類型；合成直傳無配方類型概念，以 icon 物品名（分子裝配室/裝配矩陣）當機器名。
     判不出機器（或機器名＝標籤）退回原標籤。涵蓋 自動直傳、合成直傳、面板點列 三路徑；批次上傳仍報張數。
+- **上傳鈕沿用 EMI 填充鈕的材料高亮（1.34.0）**：`EmiUploadButton` 改**直接繼承**
+  `RecipeFillButtonWidget`——`RecipeScreen.render` 是以 `widget instanceof RecipeFillButtonWidget`
+  決定要不要呼叫 `EmiRecipeHandler.render`（滑鼠指著填充鈕時**高亮已有／可合成的材料格**），
+  繼承後本鈕被指到時 EMI 會用**同一個 `EmiCraftContext`** 畫出同樣的高亮，不必自己重做一份。
+  順帶把填充實作、`canFill` 三態、缺料 tooltip、音效全部收斂成 super 呼叫
+  （原本靠反射讀 `canFill`＋持有填充鈕引用，皆已移除）。
+  代價：注入時多跑一次 super 建構子（`handler.getInventory` 掃一次終端庫存）——EMI 自己在 hover 時
+  是**每幀**跑同一支，故只在建頁時多一次可忽略。掃描填充鈕時要排除自己（本鈕也是其子類），
+  否則二次注入會疊上去。
 - **編碼並上傳全程留在 EMI（1.33.0）**：從 EMI 按上傳鈕後**不跳回終端**——不關配方頁、
   面板也開在 EMI 上、上傳完仍在 EMI（中鍵的強制開面板同理）。
   - **不讓 GTO 關掉 EMI**：GTO 的 `GTAe2PatternTerminalHandler.craft()` 末尾會
@@ -253,7 +262,7 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 | `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器鍵→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器鍵優先「世界座標」（`pos:<dim>#<packedLong>`，同名獨立），無座標退「顯示名稱」（相容舊設定） |
 | `net/Network` | 目的地**清單本體**（1.33.0，EMI 路徑用：標籤／icon／滿槽）＋座標＋建議機器同步（自建封包，雙端註冊）：C2S 請求（帶 windowId＋gen 世代號）→ 伺服端反射 `gto$currentContainers` 逐個取座標＋維度、並解析建議機器（接口→子網 grid→存儲總線→總線貼的機器→配方類型），照 index 回 S2C；client 以 gen 過濾過期回覆。子網掃描以 grid 為節點 BFS、跨 me無線連接機橋接的遠端子網（`WirelessNetwork` 節點循 grid 續掃，`MAX_SCAN_GRIDS` 封頂）。**唯一非純客戶端元件**（伺服端也需裝，多人才有座標／建議；單機自動雙端） |
 | `client/emi/EmiUploadIntegration` | EMI 配方頁注入：反射 `RecipeScreen.currentPage`，逐 `WidgetGroup` 在填充鈕上方插一顆 `EmiUploadButton`（每幀補插，翻頁即重建） |
-| `client/emi/EmiUploadButton` | 「編碼並上傳」鈕（EMI `Widget` 子類）：借 EMI 填充鈕跑填充 → `uploadFromEmi` 送編碼請求；三態貼圖、tooltip 併入填充鈕的缺料說明 |
+| `client/emi/EmiUploadButton` | 「編碼並上傳」鈕（**繼承 EMI 填充鈕** `RecipeFillButtonWidget`）：super 跑填充與狀態判定、EMI 據此連材料高亮也一併給 → `uploadFromEmi` 送編碼請求；只換貼圖與點擊後續 |
 | `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
 

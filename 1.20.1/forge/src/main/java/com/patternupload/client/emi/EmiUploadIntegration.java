@@ -29,18 +29,18 @@ import java.util.List;
  *
  * <p>位置：自填充鈕往上找第一個沒被 EMI 按鈕佔用的格（間距 14，同 {@code RecipeDisplay.addButtons}）；
  * 往上會超出配方背景時改往下找，一律不重疊。
+ *
+ * <p>{@link EmiUploadButton} 繼承自 EMI 的填充鈕，故掃描時要把自己排除，否則第二次注入會把上一顆
+ * 當成「填充鈕」而疊上去。
  */
 public final class EmiUploadIntegration {
 
-    private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
     /** EMI 按鈕欄的縱向間距（見 {@code RecipeDisplay.addButtons}）。 */
     private static final int STEP = 14;
     /** 配方背景只往上多 4px（{@code RecipeBackground(-4, -4, …)}），再上去就露出框外。 */
     private static final int TOP_LIMIT = -4;
 
     private static Field currentPageField;
-    private static Field canFillField;
-    private static boolean canFillBroken;
 
     private EmiUploadIntegration() {}
 
@@ -60,26 +60,6 @@ public final class EmiUploadIntegration {
         }
         for (WidgetGroup group : page) {
             inject(group);
-        }
-    }
-
-    /** 這則配方是否可填充（EMI 填充鈕的 {@code canFill}）——本鈕用來畫成不可用態。取不到一律當可填。 */
-    static boolean canFill(Widget fillButton) {
-        if (canFillBroken) {
-            return true;
-        }
-        try {
-            Field f = canFillField;
-            if (f == null) {
-                f = RecipeFillButtonWidget.class.getDeclaredField("canFill");
-                f.setAccessible(true);
-                canFillField = f;
-            }
-            return f.getBoolean(fillButton);
-        } catch (Throwable t) {
-            canFillBroken = true;
-            LOGGER.warn("[pattern_upload] EMI: cannot read fill button state, always shown enabled", t);
-            return true;
         }
     }
 
@@ -109,6 +89,7 @@ public final class EmiUploadIntegration {
             if (w instanceof EmiUploadButton) {
                 return; // 保險：已插過（EMI 之後又 add 了別的 widget）
             }
+            // 本鈕自己也是 RecipeFillButtonWidget 的子類（見 EmiUploadButton），故要排除掉
             if (fill == null && w instanceof RecipeFillButtonWidget) {
                 fill = w;
             }
@@ -129,7 +110,7 @@ public final class EmiUploadIntegration {
                 by += STEP;
             }
         }
-        widgets.add(new EmiUploadButton(bx, by, fill));
+        widgets.add(new EmiUploadButton(bx, by, group.recipe));
     }
 
     /** 該格是否已被 EMI 的配方按鈕佔用（只看按鈕，配方內容不在按鈕欄的 x 上）。 */

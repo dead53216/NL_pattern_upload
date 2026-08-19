@@ -14,8 +14,8 @@ import net.minecraft.resources.ResourceLocation;
 
 import appeng.client.gui.me.items.PatternEncodingTermScreen;
 
-import dev.emi.emi.api.widget.Bounds;
-import dev.emi.emi.api.widget.Widget;
+import dev.emi.emi.api.recipe.EmiRecipe;
+import dev.emi.emi.api.widget.RecipeFillButtonWidget;
 import dev.emi.emi.screen.RecipeScreen;
 
 import org.lwjgl.glfw.GLFW;
@@ -26,9 +26,14 @@ import java.util.List;
 /**
  * EMI 配方頁的「編碼並上傳」鈕：等同在樣板編碼終端按 GTOCore 的上傳鈕（編碼並發送）。
  *
- * <p>按下時**先借 EMI 自己的填充配方鈕**跑一次填充（{@code canFill} 判定、Shift 全量、音效全照
- * EMI／GTOCore 原邏輯），成功才接著要一批目的地清單走「唯一機器自動直傳 / 多台開面板」決策——
- * 行為與終端上傳鈕一模一樣，但**整條流程留在 EMI 裡**：不關配方頁、面板也開在 EMI 上。
+ * <p>**直接繼承 EMI 的填充配方鈕**（{@link RecipeFillButtonWidget}）：填充、{@code canFill} 判定、
+ * Shift 全量、缺料 tooltip、音效全部沿用 super，只換掉貼圖與點擊後續。繼承還換來一件關鍵的事——
+ * {@code RecipeScreen.render} 是以 {@code widget instanceof RecipeFillButtonWidget} 決定要不要呼叫
+ * {@code EmiRecipeHandler.render}（滑鼠指著填充鈕時**高亮已有／可合成的材料格**），所以本鈕被指到時
+ * EMI 會用**同一個 EmiCraftContext** 畫出同樣的高亮，不必自己重做一份。
+ *
+ * <p>按下後接著要一批目的地清單走「唯一機器自動直傳 / 多台開面板」決策——行為與終端上傳鈕一模一樣，
+ * 但**整條流程留在 EMI 裡**：不關配方頁、面板也開在 EMI 上。
  *
  * <p>不關 EMI 的作法見 {@link #mouseClicked}；清單為何要改由本 mod 伺服端回報見
  * {@code PatternUploadClient.uploadFromEmi}。
@@ -39,34 +44,23 @@ import java.util.List;
  *
  * <p>本類與 {@link EmiUploadIntegration} 是**唯二**碰 {@code dev.emi.*} 的類，只在 EMI 存在時才會被載入。
  */
-public final class EmiUploadButton extends Widget {
+public final class EmiUploadButton extends RecipeFillButtonWidget {
 
     /** 12x12 三態（v=0 一般、12 hover、24 不可填充），仿 EMI 自家按鈕貼圖規格。 */
     private static final ResourceLocation TEXTURE =
             new ResourceLocation(PatternUploadMod.MOD_ID, "textures/gui/emi_upload_button.png");
     static final int SIZE = 12;
 
-    private final int x;
-    private final int y;
-    /** EMI 的填充配方鈕：填充實作與「能不能填」的判定都借它，不自己複製一份。 */
-    private final Widget fillButton;
-
-    EmiUploadButton(int x, int y, Widget fillButton) {
-        this.x = x;
-        this.y = y;
-        this.fillButton = fillButton;
-    }
-
-    @Override
-    public Bounds getBounds() {
-        return new Bounds(x, y, SIZE, SIZE);
+    EmiUploadButton(int x, int y, EmiRecipe recipe) {
+        super(x, y, recipe);
     }
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float delta) {
-        int v = EmiUploadIntegration.canFill(fillButton) ? (getBounds().contains(mouseX, mouseY) ? 12 : 0) : 24;
+        // super 的 getTextureOffset 已經算好三態（0 一般／12 hover／24 不可填充），貼圖規格也照 EMI 排，
+        // 直接拿來當 v 位移即可——狀態判定與 EMI 自家填充鈕完全同步。
         com.mojang.blaze3d.systems.RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
-        graphics.blit(TEXTURE, x, y, 0.0F, (float) v, SIZE, SIZE, 32, 64);
+        graphics.blit(TEXTURE, x, y, 0.0F, (float) getTextureOffset(mouseX, mouseY), SIZE, SIZE, 32, 64);
     }
 
     @Override
@@ -75,9 +69,9 @@ public final class EmiUploadButton extends Widget {
         lines.add(line(Component.translatable("pattern_upload.emi.upload")));
         lines.add(line(Component.translatable("pattern_upload.emi.upload.desc").withStyle(ChatFormatting.GRAY)));
         lines.add(line(Component.translatable("pattern_upload.emi.upload.force").withStyle(ChatFormatting.DARK_GRAY)));
-        // 借 EMI 填充鈕自己的 tooltip（缺料清單／不適用提示）接在後面——不可填充的原因由它說明。
+        // super 的 tooltip（缺料清單／不適用提示）接在後面——不可填充的原因由 EMI／GTO 自己說明。
         try {
-            List<ClientTooltipComponent> fill = fillButton.getTooltip(mouseX, mouseY);
+            List<ClientTooltipComponent> fill = super.getTooltip(mouseX, mouseY);
             if (fill != null) {
                 lines.addAll(fill);
             }
@@ -101,7 +95,7 @@ public final class EmiUploadButton extends Widget {
                 || !(term instanceof IExtendedPatternEncodingTerm)) {
             return false;
         }
-        // 借 EMI 填充鈕跑填充，但**不讓 GTOCore 把 EMI 關掉**：
+        // 跑 super 的填充，但**不讓 GTOCore 把 EMI 關掉**：
         // GTO 的 GTAe2PatternTerminalHandler.craft() 末尾會 `if (mc.screen instanceof RecipeScreen rs) rs.close()`。
         // 填充期間把 mc.screen 直接指向終端（不經 setScreen，不跑 removed/init 生命週期，中間也不會有 tick／render）
         // → GTO 那個 instanceof 不成立、EMI 留著；EmiApi.getHandledScreen() 反而更直接（AbstractContainerScreen 分支）。
@@ -109,7 +103,7 @@ public final class EmiUploadButton extends Widget {
         boolean filled;
         mc.screen = term;
         try {
-            filled = fillButton.mouseClicked(mouseX, mouseY, 0);
+            filled = super.mouseClicked(mouseX, mouseY, 0);
         } finally {
             mc.screen = recipeScreen;
         }
