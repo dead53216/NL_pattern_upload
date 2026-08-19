@@ -66,6 +66,11 @@ repositories {
     }
     // LowDragLib（ldlib）僅在 CurseForge：GTCEu 的 IMultiPart 型別階層需要它做編譯期型別解析
     maven { url = 'https://cursemaven.com' }
+    // EMI（可選整合：配方頁「填充配方」鈕上方加上傳鈕）發佈於此
+    maven {
+        name = 'TerraformersMC'
+        url = 'https://maven.terraformersmc.com/'
+    }
 }
 
 dependencies {
@@ -88,6 +93,9 @@ dependencies {
     compileOnly "com.gto:datasynclib-forge-1.20.1:${datasynclib_version}"
     // LowDragLib：GTCEu IMultiPart 等介面的型別階層（含 IUIHolder）——僅編譯期解析，runtime 由整合包提供
     compileOnly "curse.maven:ldlib-626676:${ldlib_curse_file}"
+    // EMI（可選，client）：要完整 jar——注入按鈕用的 RecipeScreen / WidgetGroup 在 dev.emi.emi.api 之外，
+    // :api 不夠。所有 dev.emi.* 存取都隔離在 client/emi/ 並以執行期 ModList 旗標守衛，故 compileOnly。
+    compileOnly fg.deobf("dev.emi:emi-forge:${emi_version}")
 }
 
 mixin {

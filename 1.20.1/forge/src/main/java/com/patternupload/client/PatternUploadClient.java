@@ -44,6 +44,13 @@ public final class PatternUploadClient {
     private static boolean forcePanel = false;
 
     /**
+     * EMI 是否載入（EMI 配方頁上傳鈕用）。{@code ModList} 要 mod 載入完才可用、且整合失敗要能就地停用，
+     * 故不用 static final，改為延後判定並快取；null＝尚未判定。
+     */
+    @Nullable
+    private static Boolean emiLoaded = null;
+
+    /**
      * 目的地座標同步（同名供應器獨立身分用）：每次劫持新清單 {@link #posGen}+1，
      * 過濾過期 S2C 回覆；{@link #posDims}/{@link #posPacked} 照 index 對齊，
      * null 或某格 dim==null = 該列無座標 → 退回名稱鍵。伺服端沒裝本 mod 時永遠收不到 → 全退名稱鍵。
@@ -658,6 +665,16 @@ public final class PatternUploadClient {
 
     @SubscribeEvent
     public static void onRenderPre(ScreenEvent.Render.Pre event) {
+        if (emiLoaded()) {
+            // EMI 配方頁：每幀確保「編碼並上傳」鈕已插進每則配方（EMI 翻頁／換分頁會重建 widget 清單）。
+            // 整條路徑（含 dev.emi.* 類載入）都在這個守衛裡，沒裝 EMI 就永遠不會解析到那些類。
+            try {
+                com.patternupload.client.emi.EmiUploadIntegration.onScreen(event.getScreen());
+            } catch (Throwable t) {
+                emiLoaded = Boolean.FALSE; // 一次失敗就整組停用，不每幀刷錯誤
+                LOGGER.warn("[pattern_upload] EMI integration failed, disabled for this session", t);
+            }
+        }
         if (!(event.getScreen() instanceof PatternEncodingTermScreen<?> screen)) {
             return;
         }
@@ -962,6 +979,35 @@ public final class PatternUploadClient {
                 LOGGER.info("[pattern_upload] middle-click encode button → force panel (no auto-upload)");
             }
         }
+    }
+
+    private static boolean emiLoaded() {
+        Boolean v = emiLoaded;
+        if (v == null) {
+            try {
+                v = net.minecraftforge.fml.ModList.get().isLoaded("emi");
+            } catch (Throwable t) {
+                v = Boolean.FALSE;
+            }
+            emiLoaded = v;
+        }
+        return v;
+    }
+
+    /**
+     * EMI 配方頁的「編碼並上傳」鈕按下（配方已由 EMI 填進終端）：要一批目的地清單，
+     * 之後完全走既有流程（劫持清單 → 等座標／建議 → 唯一機器自動直傳／多台開面板）。
+     *
+     * @param force true＝這批一律開面板（中鍵手勢，比照終端上傳鈕中鍵）
+     */
+    public static void uploadFromEmi(AbstractContainerMenu menu, boolean force) {
+        if (!(menu instanceof IExtendedPatternEncodingTerm.Menu term)) {
+            LOGGER.warn("[pattern_upload] EMI upload: menu is not a GTO pattern encoding term, ignored");
+            return;
+        }
+        forcePanel = force;
+        term.gtolib$sendEncodeRequest();
+        LOGGER.info("[pattern_upload] EMI upload button → encode request sent (forcePanel={})", force);
     }
 
     /** 滑鼠是否落在上傳鈕矩形內（手動判界，不受按鈕 active 狀態影響）。 */

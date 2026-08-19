@@ -40,6 +40,27 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   - **聊天欄回報目標優先報機器（1.17.1，`sentDisplayName` 統一格式）**：「機器名 (供應器標籤)」——
     機器取 有效機器（手動指定/建議）?? 樣板類型；合成直傳無配方類型概念，以 icon 物品名（分子裝配室/裝配矩陣）當機器名。
     判不出機器（或機器名＝標籤）退回原標籤。涵蓋 自動直傳、合成直傳、面板點列 三路徑；批次上傳仍報張數。
+- **EMI 配方頁上傳鈕（1.32.0）**：從樣板編碼終端開 EMI 時，每則配方的 **EMI「填充配方」鈕上方**多一顆
+  **「編碼並上傳」鈕**——一鍵＝填充配方＋按終端上傳鈕，於是**在 EMI 就能直接選機器上傳、唯一機器自動上傳**，
+  不必先填充再回終端點一次。左／右鍵＝一般決策（唯一機器直傳／多台開面板），**中鍵＝強制開面板**（同終端手勢）。
+  - **填充借 EMI 自己的鈕**：按下時先呼叫該則配方的 `RecipeFillButtonWidget.mouseClicked` →
+    `canFill` 判定、Shift 全量、音效、關配方頁全照 EMI／GTOCore 原邏輯（GTO 的
+    `GTAe2PatternTerminalHandler.craft` 還會 `gtolib$addRecipe(配方 id)`，機器判定因此比手動填格更準）；
+    **填充回 false（缺料／不支援）就不送編碼請求**。成功才 `gtolib$sendEncodeRequest()`，之後完全走既有流程。
+  - **順序安全**：EMI 填充是 `FakeSlot.setFilterTo` 送封包給伺服端（客戶端槽當下不會更新），
+    編碼請求是**同一條連線的後續封包**、伺服端照到達順序處理 → 編碼時看到的必是填好的格子；
+    客戶端機器判定在 `decidePending`（等座標／建議才判），那時槽位早同步回來。故**不需要等待或輪詢**。
+  - **零 mixin 的按鈕注入**：把自製 widget 直接加進 EMI 的 `WidgetGroup.widgets`（公開可變 list），
+    繪製／hover／tooltip／點擊派送全由 EMI 自己處理（與原生鈕同層同序、不會蓋掉 EMI tooltip）。
+    只反射一個 private 欄位 `RecipeScreen.currentPage`（EMI 自家欄位名不經 SRG remap，穩定）。
+    每幀注入而非只在 init——EMI 翻頁／換分頁會重建 `currentPage`，逐 group 以「最後一個 widget 是不是我們的」
+    O(1) 判定已插過。位置自填充鈕往上找第一個沒被 EMI 按鈕佔用的格（間距 14，同 `RecipeDisplay.addButtons`），
+    往上會超出配方背景（`RecipeBackground` 只多 4px）時改往下找，一律不重疊。
+  - **只在對的地方出現**：`RecipeScreen.old` 是 GTO 樣板編碼終端、且該則配方有 EMI 填充鈕，才插這顆鈕。
+    貼圖三態（一般／hover／不可填充）比照 EMI 規格，不可填充態讀填充鈕的 `canFill`，tooltip 後段直接接
+    EMI 填充鈕自己的 tooltip（缺料清單由它說明）。
+  - **EMI 為軟依賴**：所有 `dev.emi.*` 存取隔離在 `client/emi/`，入口以 `ModList.isLoaded("emi")` 守衛
+    （沒裝 EMI 永遠不會解析到那些類）；整合若拋例外就整組停用、不影響終端本身。
 - **中鍵上傳鈕＝強制開面板**：中鍵點 GTOCore 上傳（編碼）鈕 → 呼叫 `gtolib$sendEncodeRequest()` 要清單，
   但設 `forcePanel` 旗標讓這批**跳過所有自動直傳**（含合成類與單一匹配），一律開面板讓玩家自選。
   攔在 `MouseButtonPressed.Pre`（HIGHEST），以 `gto$getEncodeButton()` 邊界判界；旗標開面板即清、關終端也清。
@@ -212,6 +233,8 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 | `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、標題列拖曳、右下角縮放、本地重排 |
 | `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器鍵→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器鍵優先「世界座標」（`pos:<dim>#<packedLong>`，同名獨立），無座標退「顯示名稱」（相容舊設定） |
 | `net/Network` | 目的地座標＋建議機器同步（自建封包，雙端註冊）：C2S 請求（帶 windowId＋gen 世代號）→ 伺服端反射 `gto$currentContainers` 逐個取座標＋維度、並解析建議機器（接口→子網 grid→存儲總線→總線貼的機器→配方類型），照 index 回 S2C；client 以 gen 過濾過期回覆。子網掃描以 grid 為節點 BFS、跨 me無線連接機橋接的遠端子網（`WirelessNetwork` 節點循 grid 續掃，`MAX_SCAN_GRIDS` 封頂）。**唯一非純客戶端元件**（伺服端也需裝，多人才有座標／建議；單機自動雙端） |
+| `client/emi/EmiUploadIntegration` | EMI 配方頁注入：反射 `RecipeScreen.currentPage`，逐 `WidgetGroup` 在填充鈕上方插一顆 `EmiUploadButton`（每幀補插，翻頁即重建） |
+| `client/emi/EmiUploadButton` | 「編碼並上傳」鈕（EMI `Widget` 子類）：借 EMI 填充鈕跑填充 → `uploadFromEmi` 送編碼請求；三態貼圖、tooltip 併入填充鈕的缺料說明 |
 | `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |
 | `client/RecipeTypeIcons` | `GTRegistries.MACHINES` 掃描建 GTRecipeType→代表機器 icon 快取；名稱沿用 GTOCore 慣例 `"gtceu." + registryName.getPath()` |
 
@@ -255,7 +278,10 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 - 外加 **LowDragLib（ldlib）** 自 CurseForge（`cursemaven.com`，`curse.maven:ldlib-626676:<fileId>`，對齊 GTOCore 1.0.48）：
   `net/Network` 解析建議機器時用到 GTCEu `IMultiPart`，其型別階層含 ldlib 的 `IUIHolder`，缺它 `instanceof` 編不過。
 - 該 maven 的 module metadata 已在 repo 宣告 `metadataSources { mavenPom(); artifact() }` 忽略（其 `.module` 綁 JVM21 屬性）。
-- `mods.toml` 強制依賴 `gtocore`。
+- **EMI**（可選，client）自 `maven.terraformersmc.com`：`dev.emi:emi-forge:<emi_version>` **完整 jar**
+  （注入按鈕要碰 `RecipeScreen`／`WidgetGroup` 等 `dev.emi.emi.api` 之外的內部類，`:api` classifier 不夠）；
+  `compileOnly fg.deobf(...)`，runtime 由整合包提供、缺席亦可運作。
+- `mods.toml` 強制依賴 `gtocore`，可選依賴 `emi`、`jecharacters`。
 - **dev 測試注意**：`build/libs` 的 jar（含 `-slim`）全被 FG6 reobf 成 SRG，**不能**丟進 moddev dev 環境；
   dev 用 `build/classes + resources` 手打的 named jar（見 build/devjar2 流程）。
 
