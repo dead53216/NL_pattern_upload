@@ -118,6 +118,29 @@ public final class PatternUploadClient {
     private static List<ListBoxReflector.Dest> pendingDests;
     /** true＝清單要等伺服端回覆自建（EMI 路徑），不是從 GTO 清單框劫持來的。 */
     private static boolean pendingFromReply;
+    /**
+     * EMI 路徑的**權威配方**（1.34.1）：EMI 的填充只是把 {@code FakeSlot.setFilterTo} 的封包送出去，
+     * 客戶端的編碼格與 {@code gtocore$recipe} 要下一 tick 才會同步回來——這期間去讀選單判機器，
+     * 拿到的是**上一張樣板**的配方（症狀：上傳到上次那台機器）。
+     * 故 EMI 路徑改用 {@code EmiRecipe.getId()}（GT 配方即 {@code GTRecipeDefinition.id}，GTO 自己
+     * 也是拿它去 {@code gtolib$addRecipe}）當場解析出配方類型／電壓／分類，完全不看客戶端選單狀態。
+     * 綁定在 {@link #emiMenu} 上；終端自行編碼（劫持清單）或關終端即失效。
+     */
+    @Nullable
+    private static GTRecipeType emiType;
+    private static int emiTier = -1;
+    private static String emiCat = "";
+    @Nullable
+    private static AbstractContainerMenu emiMenu;
+    /**
+     * 非 GT 配方（原版合成／燒煉／切石，解析不出 GT 類型）走 EMI 路徑時的同步等待：
+     * 記下按鈕按下當時的選單快照，選單狀態沒變就再等一 tick（上限 {@link #EMI_SYNC_WAIT}），
+     * 免得用上一張樣板的殘留狀態判定。
+     */
+    @Nullable
+    private static String pendingSnapshot;
+    private static int pendingSyncWait;
+    private static final int EMI_SYNC_WAIT = 20;
     private static boolean pendingForce;
     private static int pendingWaitTicks = -1;
 
@@ -369,8 +392,71 @@ public final class PatternUploadClient {
      * 配方類型概念不適用；伺服端 gto$craftFirst 已把合成容器排前，本地不要再動。
      */
     static boolean isCraftMode(AbstractContainerMenu menu) {
+        if (emiOverrideFor(menu) != null) {
+            return false; // EMI 帶來的 GT 配方必定是處理樣板（選單的 mode 此刻可能還沒同步）
+        }
         return menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm &&
                 petm.getMode() != appeng.parts.encoding.EncodingMode.PROCESSING;
+    }
+
+    /** 這個選單目前是否有 EMI 帶來的權威配方類型（見 {@link #emiType}）。 */
+    @Nullable
+    private static GTRecipeType emiOverrideFor(AbstractContainerMenu menu) {
+        return menu != null && menu == emiMenu ? emiType : null;
+    }
+
+    /** 終端自行編碼／關閉時清掉 EMI 權威配方，之後照舊看客戶端選單。 */
+    private static void clearEmiRecipe() {
+        emiType = null;
+        emiTier = -1;
+        emiCat = "";
+        emiMenu = null;
+    }
+
+    /**
+     * 由 {@code EmiRecipe.getId()} 解析權威配方：GT 配方 id 形如 {@code <type_ns>:<type_path>/<recipe>}，
+     * 前段查得到 {@link GTRecipeType} 即採用；再以完整 id 到 {@code type.recipes} 取定義拿**精確**
+     * 電壓與分類（取不到就只用類型、電壓分類未知）。非 GT 配方（原版合成／燒煉／切石）回 false。
+     */
+    private static boolean resolveEmiRecipe(AbstractContainerMenu menu, @Nullable ResourceLocation id) {
+        clearEmiRecipe();
+        if (id == null) {
+            return false;
+        }
+        String full = id.toString();
+        int slash = full.indexOf('/');
+        if (slash <= 0) {
+            return false;
+        }
+        ResourceLocation typeRl = ResourceLocation.tryParse(full.substring(0, slash));
+        GTRecipeType type = typeRl == null ? null : GTRegistries.RECIPE_TYPES.get(typeRl);
+        if (type == null) {
+            return false;
+        }
+        emiType = type;
+        emiMenu = menu;
+        try {
+            var def = type.recipes.get(id);
+            if (def != null) {
+                emiTier = def.tier;
+                if (def.recipeCategory != null && def.recipeCategory.registryKey != null) {
+                    emiCat = def.recipeCategory.registryKey.getPath();
+                }
+            }
+        } catch (Throwable ignored) {
+            // 取不到定義 → 只用類型（電壓／分類未知，排序退回中性）
+        }
+        return true;
+    }
+
+    /**
+     * 客戶端選單「這張樣板」的狀態快照（模式＋gtocore$recipe＋產物簽章）：
+     * EMI 填充後選單要下一 tick 才同步，快照沒變＝還是上一張，不能拿來判機器。
+     */
+    private static String menuSnapshot(AbstractContainerMenu menu) {
+        String mode = menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm
+                ? String.valueOf(petm.getMode()) : "";
+        return mode + '|' + readGtoRecipe(menu) + '|' + outputSignature(menu);
     }
 
     /**
@@ -404,6 +490,10 @@ public final class PatternUploadClient {
 
     @Nullable
     static GTRecipeType currentRecipeType(AbstractContainerMenu menu) {
+        GTRecipeType emi = emiOverrideFor(menu);
+        if (emi != null) {
+            return emi; // EMI 帶來的權威配方：不看（可能落後一 tick 的）客戶端選單狀態
+        }
         if (isCraftMode(menu)) {
             return null; // 殘留的 gtocore$recipe 不適用於合成類樣板
         }
@@ -445,12 +535,18 @@ public final class PatternUploadClient {
      * 呼叫前確保 {@link #currentRecipeType} 同一 menu 已算過（共用快取）。
      */
     static String currentRecipeCategory(AbstractContainerMenu menu) {
+        if (emiOverrideFor(menu) != null) {
+            return emiCat;
+        }
         currentRecipeType(menu);
         return crtCat;
     }
 
     /** 本次樣板配方的電壓 tier；-1＝未知。呼叫前確保 {@link #currentRecipeType} 同一 menu 已算過（共用快取）。 */
     static int currentRecipeTier(AbstractContainerMenu menu) {
+        if (emiOverrideFor(menu) != null) {
+            return emiTier;
+        }
         currentRecipeType(menu);
         return crtTier;
     }
@@ -716,6 +812,8 @@ public final class PatternUploadClient {
             return; // 反射失敗：保留 GTOCore 原清單
         }
         box.setVisible(false);
+        // 終端自行編碼（玩家按了終端的上傳鈕）→ 這批以客戶端選單為準，清掉 EMI 帶來的權威配方
+        clearEmiRecipe();
         // 中鍵手勢：這批清單強制開面板、跳過所有自動直傳（消費即清）
         boolean force = forcePanel;
         forcePanel = false;
@@ -784,6 +882,16 @@ public final class PatternUploadClient {
      * 剛好一個 → 直傳；多個 → 開面板讓玩家自選（不亂猜）；零個 → 開面板。清 pending。
      */
     private static void decidePending() {
+        // 非 GT 配方走 EMI 路徑：EMI 填充只送封包，客戶端選單要下一 tick 才反映新樣板 →
+        // 選單快照沒變就再等一 tick（上限 EMI_SYNC_WAIT），免得拿上一張樣板的殘留狀態判機器。
+        if (pendingFromReply && pendingSnapshot != null && pendingSyncWait > 0 && pendingScreen != null
+                && pendingSnapshot.equals(menuSnapshot(pendingScreen.getMenu()))) {
+            pendingSyncWait--;
+            pendingWaitTicks = 1; // 下一 tick 再判（逾時計數由 onClientTick 推進）
+            return;
+        }
+        pendingSnapshot = null;
+        pendingSyncWait = 0;
         PatternEncodingTermScreen<?> screen = pendingScreen;
         net.minecraft.client.gui.screens.Screen host = pendingHost;
         List<ListBoxReflector.Dest> dests = pendingDests;
@@ -1068,7 +1176,8 @@ public final class PatternUploadClient {
      * @param force true＝這批一律開面板（中鍵手勢，比照終端上傳鈕中鍵）
      */
     public static void uploadFromEmi(PatternEncodingTermScreen<?> term,
-                                     net.minecraft.client.gui.screens.Screen host, boolean force) {
+                                     net.minecraft.client.gui.screens.Screen host, boolean force,
+                                     @Nullable ResourceLocation recipeId) {
         AbstractContainerMenu menu = term.getMenu();
         if (!(menu instanceof IExtendedPatternEncodingTerm.Menu gto)) {
             LOGGER.warn("[pattern_upload] EMI upload: menu is not a GTO pattern encoding term, ignored");
@@ -1076,6 +1185,8 @@ public final class PatternUploadClient {
         }
         overlay = null;
         forcePanel = false; // EMI 路徑不經 onRenderPre 的旗標，force 直接進 pending
+        // 機器判定的權威來源＝這則 EMI 配方本身（客戶端選單此刻還是上一張樣板，見 emiType）
+        boolean known = resolveEmiRecipe(menu, recipeId);
         gto.gtolib$sendEncodeRequest();
         requestPositionsFor(menu); // 必須在編碼請求「之後」送：同連線後續封包 → 伺服端已編碼完才處理
         pendingScreen = term;
@@ -1084,7 +1195,11 @@ public final class PatternUploadClient {
         pendingFromReply = true;
         pendingForce = force;
         pendingWaitTicks = DECIDE_WAIT_TICKS;
-        LOGGER.info("[pattern_upload] EMI upload button → encode + list request sent (force={})", force);
+        pendingSnapshot = known ? null : menuSnapshot(menu); // 非 GT 配方：只能等選單同步再判
+        pendingSyncWait = known ? 0 : EMI_SYNC_WAIT;
+        LOGGER.info("[pattern_upload] EMI upload button → encode + list request sent (force={}, recipe={}, "
+                + "type={}, tier={}, cat='{}')", force, recipeId, emiType == null ? null : emiType.registryName,
+                emiTier, emiCat);
     }
 
     /**
@@ -1187,6 +1302,7 @@ public final class PatternUploadClient {
         // 關終端就清中鍵旗標，避免無效樣板（伺服端沒回清單）殘留到下次右鍵誤觸
         if (event.getScreen() instanceof PatternEncodingTermScreen<?>) {
             forcePanel = false;
+            clearEmiRecipe();
             // 放棄尚未決策的 pending（終端已關）
             pendingScreen = null;
             pendingHost = null;

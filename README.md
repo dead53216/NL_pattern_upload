@@ -40,6 +40,19 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   - **聊天欄回報目標優先報機器（1.17.1，`sentDisplayName` 統一格式）**：「機器名 (供應器標籤)」——
     機器取 有效機器（手動指定/建議）?? 樣板類型；合成直傳無配方類型概念，以 icon 物品名（分子裝配室/裝配矩陣）當機器名。
     判不出機器（或機器名＝標籤）退回原標籤。涵蓋 自動直傳、合成直傳、面板點列 三路徑；批次上傳仍報張數。
+- **EMI 路徑的機器判定改吃配方本身（1.34.1 修「上傳到上次那台機器」）**：EMI 的填充只是把
+  `FakeSlot.setFilterTo` 的封包**送出去**，客戶端的編碼格與 `gtocore$recipe` 要**下一 tick** 才同步回來；
+  而本 mod 的清單回覆是伺服端在**同一 tick 的封包處理階段**就送出的（早於 `broadcastChanges`），
+  於是決策時讀到的選單狀態還是**上一張樣板** → 判成上次那台機器。
+  （伺服端編碼的樣板本身一直是對的，錯的只有「送去哪台」。）
+  - 現在 EMI 路徑帶著 `EmiRecipe.getId()` 一起決策——GT 配方的 id 即 `GTRecipeDefinition.id`
+    （GTO 自己也是拿它去 `gtolib$addRecipe`），前段查 `GTRegistries.RECIPE_TYPES` 得配方類型、
+    完整 id 到 `type.recipes` 取定義拿**精確**電壓與分類。`currentRecipeType`／`currentRecipeTier`／
+    `currentRecipeCategory`／`isCraftMode` 在這個選單上一律改用它（GT 配方必為處理樣板），
+    **完全不看客戶端選單狀態**，也就沒有同步先後的問題。綁在選單上，終端自行編碼（劫持清單）或關終端即失效。
+  - 非 GT 配方（原版合成／燒煉／切石，解析不出 GT 類型）沒有這個權威來源 → 改成**等選單真的變了再判**：
+    按鈕按下時記錄選單快照（模式＋`gtocore$recipe`＋產物簽章），快照沒變就每 tick 重試，
+    上限 20 tick 後照舊決策（樣板與上一張完全相同時本來就等不到變化，等到上限再判也是對的）。
 - **上傳鈕沿用 EMI 填充鈕的材料高亮（1.34.0）**：`EmiUploadButton` 改**直接繼承**
   `RecipeFillButtonWidget`——`RecipeScreen.render` 是以 `widget instanceof RecipeFillButtonWidget`
   決定要不要呼叫 `EmiRecipeHandler.render`（滑鼠指著填充鈕時**高亮已有／可合成的材料格**），

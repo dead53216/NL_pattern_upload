@@ -113,7 +113,10 @@ public final class EmiUploadButton extends RecipeFillButtonWidget {
         }
         // 中鍵＝強制開面板（比照終端上傳鈕的中鍵手勢）；左／右鍵走一般自動直傳決策。
         // 決策與面板都掛在 EMI 配方頁上——整條編碼並上傳流程不跳回終端。
-        PatternUploadClient.uploadFromEmi(term, recipeScreen, button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE);
+        // 帶上這則配方的 id：GT 配方即 GTRecipeDefinition.id，客戶端據此當場定機器，
+        // 不必等（會慢一 tick 的）選單同步——否則判到的是上一張樣板的機器。
+        PatternUploadClient.uploadFromEmi(term, recipeScreen, button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE,
+                this.recipe.getId());
         return true;
     }
 }
