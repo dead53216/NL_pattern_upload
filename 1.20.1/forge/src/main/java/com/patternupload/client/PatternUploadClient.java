@@ -1199,6 +1199,12 @@ public final class PatternUploadClient {
             LOGGER.warn("[pattern_upload] EMI upload: menu is not a GTO pattern encoding term, ignored");
             return;
         }
+        // 上一次 EMI 上傳還在決策中（等清單／等選單同步）→ 忽略這次點擊。
+        // 否則連點會每次重置等待計數，決策永遠跑不完＝按了完全沒反應（1.34.3）。
+        if (pendingFromReply && pendingScreen == term) {
+            LOGGER.info("[pattern_upload] EMI upload button ignored: previous request still deciding");
+            return;
+        }
         overlay = null;
         forcePanel = false; // EMI 路徑不經 onRenderPre 的旗標，force 直接進 pending
         // 機器判定的權威來源＝這則 EMI 配方本身（客戶端選單此刻還是上一張樣板，見 emiType）
