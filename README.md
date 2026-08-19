@@ -40,9 +40,28 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
   - **聊天欄回報目標優先報機器（1.17.1，`sentDisplayName` 統一格式）**：「機器名 (供應器標籤)」——
     機器取 有效機器（手動指定/建議）?? 樣板類型；合成直傳無配方類型概念，以 icon 物品名（分子裝配室/裝配矩陣）當機器名。
     判不出機器（或機器名＝標籤）退回原標籤。涵蓋 自動直傳、合成直傳、面板點列 三路徑；批次上傳仍報張數。
+- **編碼並上傳全程留在 EMI（1.33.0）**：從 EMI 按上傳鈕後**不跳回終端**——不關配方頁、
+  面板也開在 EMI 上、上傳完仍在 EMI（中鍵的強制開面板同理）。
+  - **不讓 GTO 關掉 EMI**：GTO 的 `GTAe2PatternTerminalHandler.craft()` 末尾會
+    `if (mc.screen instanceof RecipeScreen rs) rs.close()`。故填充期間把 `mc.screen` **直接指向終端**
+    （不經 `setScreen`，不跑 removed/init 生命週期，其間也不會有 tick／render）→ 那個 instanceof 不成立、
+    EMI 留著；`EmiApi.getHandledScreen()` 反而更直接（走 `AbstractContainerScreen` 分支回終端）。用完 finally 還原。
+    **防止關閉**而非關了再開——`RecipeScreen.close()` 走 `EmiHistory.popUntil`，事後補開會弄亂 EMI 的歷史堆疊。
+  - **清單改由本 mod 伺服端回報**：GTO 的 `Message$Client.patternDestinationReceived` **只在
+    `mc.screen` 是樣板終端時**才把清單填進它的列表框——人在 EMI 配方頁時整包被丟掉，劫持無從發生。
+    故 EMI 路徑不碰 GTO 清單框：`gtolib$sendEncodeRequest()` 之後緊接著送本 mod 的座標請求
+    （同連線後續封包 → 伺服端先編碼、`gto$currentContainers` 就緒才處理我們的），回覆除原有座標／建議／
+    電壓／剩餘格外，再帶**清單本體**（`name`／`iconId`／`full` 尾綴段，1.33.0；`name` 用 `writeComponent`
+    保留翻譯鍵、由客戶端在地化）。索引與 `gto$currentContainers` 同序＝GTO 會送的那份，
+    故 `gtolib$sendPattern(index)` 照舊對得上。伺服端沒裝本 mod → 收不到清單 → 提示「取不到目的地清單」不動作。
+  - **決策與面板掛在 EMI 畫面上**：`pendingHost`／`UploadOverlay.host` 記錄面板該掛哪個畫面
+    （終端路徑＝終端、EMI 路徑＝配方頁），事件比對與邊界夾取都改用它；選單存取仍走終端畫面
+    （終端選單即使不是當前畫面也還開著，`gtolib$sendPattern` 照樣有效）。合成類樣板的直傳
+    （`craftDirectSend`）抽成共用方法，兩條路徑都走同一套。
 - **EMI 配方頁上傳鈕（1.32.0）**：從樣板編碼終端開 EMI 時，每則配方的 **EMI「填充配方」鈕上方**多一顆
   **「編碼並上傳」鈕**——一鍵＝填充配方＋按終端上傳鈕，於是**在 EMI 就能直接選機器上傳、唯一機器自動上傳**，
   不必先填充再回終端點一次。左／右鍵＝一般決策（唯一機器直傳／多台開面板），**中鍵＝強制開面板**（同終端手勢）。
+  **1.33.0 起整條流程留在 EMI**（見上一條）；1.32.0 當時會被 GTO 關回終端。
   - **填充借 EMI 自己的鈕**：按下時先呼叫該則配方的 `RecipeFillButtonWidget.mouseClicked` →
     `canFill` 判定、Shift 全量、音效、關配方頁全照 EMI／GTOCore 原邏輯（GTO 的
     `GTAe2PatternTerminalHandler.craft` 還會 `gtolib$addRecipe(配方 id)`，機器判定因此比手動填格更準）；
@@ -232,7 +251,7 @@ GTOCore 樣板編碼終端「編碼並發送（上傳按鈕右鍵）」的自製
 | `client/ListBoxReflector` | 反射讀 `AESearchPatternProviderListBox.allItems`（SimpleItem: index/icon/name/full；已對照 0.5.6-alpha/beta/26.7.x），失敗自動退回原介面 |
 | `client/UploadOverlay` | 面板本體（純類）：兩模式清單、搜尋、hover/tooltip、捲動、標題列拖曳、右下角縮放、本地重排 |
 | `client/PatternUploadConfig` | `config/pattern_upload.json` 持久化：`providerMachines`（供應器鍵→配方類型 id）＋面板位置/尺寸（panelX/Y/W/Rows）；供應器鍵優先「世界座標」（`pos:<dim>#<packedLong>`，同名獨立），無座標退「顯示名稱」（相容舊設定） |
-| `net/Network` | 目的地座標＋建議機器同步（自建封包，雙端註冊）：C2S 請求（帶 windowId＋gen 世代號）→ 伺服端反射 `gto$currentContainers` 逐個取座標＋維度、並解析建議機器（接口→子網 grid→存儲總線→總線貼的機器→配方類型），照 index 回 S2C；client 以 gen 過濾過期回覆。子網掃描以 grid 為節點 BFS、跨 me無線連接機橋接的遠端子網（`WirelessNetwork` 節點循 grid 續掃，`MAX_SCAN_GRIDS` 封頂）。**唯一非純客戶端元件**（伺服端也需裝，多人才有座標／建議；單機自動雙端） |
+| `net/Network` | 目的地**清單本體**（1.33.0，EMI 路徑用：標籤／icon／滿槽）＋座標＋建議機器同步（自建封包，雙端註冊）：C2S 請求（帶 windowId＋gen 世代號）→ 伺服端反射 `gto$currentContainers` 逐個取座標＋維度、並解析建議機器（接口→子網 grid→存儲總線→總線貼的機器→配方類型），照 index 回 S2C；client 以 gen 過濾過期回覆。子網掃描以 grid 為節點 BFS、跨 me無線連接機橋接的遠端子網（`WirelessNetwork` 節點循 grid 續掃，`MAX_SCAN_GRIDS` 封頂）。**唯一非純客戶端元件**（伺服端也需裝，多人才有座標／建議；單機自動雙端） |
 | `client/emi/EmiUploadIntegration` | EMI 配方頁注入：反射 `RecipeScreen.currentPage`，逐 `WidgetGroup` 在填充鈕上方插一顆 `EmiUploadButton`（每幀補插，翻頁即重建） |
 | `client/emi/EmiUploadButton` | 「編碼並上傳」鈕（EMI `Widget` 子類）：借 EMI 填充鈕跑填充 → `uploadFromEmi` 送編碼請求；三態貼圖、tooltip 併入填充鈕的缺料說明 |
 | `client/PinyinMatch` | JECh（jecharacters）軟依賴，純反射 `Match#contains`；缺席退回子字串比對（同 NL_oreveinfilter 做法） |

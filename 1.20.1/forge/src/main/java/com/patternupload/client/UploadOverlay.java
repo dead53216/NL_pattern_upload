@@ -61,6 +61,12 @@ final class UploadOverlay {
     private static final String FACTORY_SEPARATORS = " -－—:：·・";
 
     private final PatternEncodingTermScreen<?> screen;
+    /**
+     * 面板實際掛的畫面（事件比對／邊界夾取用）：終端路徑＝{@link #screen} 本身；
+     * **EMI 路徑＝EMI 配方頁**（整條編碼並上傳流程留在 EMI 裡，不跳回終端）。
+     * 選單存取一律走 {@link #screen}（終端選單即使不是當前畫面也還開著）。
+     */
+    private final net.minecraft.client.gui.screens.Screen host;
     private final java.util.List<ListBoxReflector.Dest> destinations;
     /** 中鍵強制開面板：面板一律視為非合成模式（見 {@link #craftMode()}），讓玩家改機器／排序／逐列上傳。 */
     private final boolean forced;
@@ -110,8 +116,10 @@ final class UploadOverlay {
         }
     }
 
-    UploadOverlay(PatternEncodingTermScreen<?> screen, java.util.List<ListBoxReflector.Dest> destinations, boolean forced) {
+    UploadOverlay(PatternEncodingTermScreen<?> screen, net.minecraft.client.gui.screens.Screen host,
+                  java.util.List<ListBoxReflector.Dest> destinations, boolean forced) {
         this.screen = screen;
+        this.host = host;
         this.destinations = destinations;
         this.forced = forced;
         this.font = Minecraft.getInstance().font;
@@ -122,8 +130,8 @@ final class UploadOverlay {
         Integer px = PatternUploadConfig.panelX();
         Integer py = PatternUploadConfig.panelY();
         if (px != null && py != null) {
-            this.x = Math.max(0, Math.min(px, screen.width - w));
-            this.y = Math.max(0, Math.min(py, screen.height - 40));
+            this.x = Math.max(0, Math.min(px, host.width - w));
+            this.y = Math.max(0, Math.min(py, host.height - 40));
         } else {
             defaultPosition();
         }
@@ -161,8 +169,8 @@ final class UploadOverlay {
             gx = screen.getGuiLeft() + screen.getXSize() + 4;
             gy = screen.getGuiTop() + 4;
         }
-        this.x = Math.max(0, Math.min(gx, screen.width - w));
-        this.y = Math.max(2, Math.min(gy, screen.height - heightFor(maxRows) - 2));
+        this.x = Math.max(0, Math.min(gx, host.width - w));
+        this.y = Math.max(2, Math.min(gy, host.height - heightFor(maxRows) - 2));
     }
 
     private static int orDefault(Integer v, int def) {
@@ -202,8 +210,9 @@ final class UploadOverlay {
         return y + (my - y) / uiScale;
     }
 
-    PatternEncodingTermScreen<?> screen() {
-        return screen;
+    /** 面板掛的畫面（事件比對用）：終端路徑＝終端；EMI 路徑＝EMI 配方頁。 */
+    net.minecraft.client.gui.screens.Screen screen() {
+        return host;
     }
 
     /** 伺服端座標回來後（PatternUploadClient 呼叫）：以新座標鍵重排、刷新指定顯示。 */
@@ -789,8 +798,8 @@ final class UploadOverlay {
             return false;
         }
         // 拖曳移動用螢幕座標（面板錨點 (x,y) 本來就是螢幕座標，1:1 跟手）
-        x = Math.max(0, Math.min((int) mx - dragOffX, screen.width - w));
-        y = Math.max(0, Math.min((int) my - dragOffY, screen.height - 40));
+        x = Math.max(0, Math.min((int) mx - dragOffX, host.width - w));
+        y = Math.max(0, Math.min((int) my - dragOffY, host.height - 40));
         searchBox.setX(x + 21);
         searchBox.setY(y + 3);
         return true;

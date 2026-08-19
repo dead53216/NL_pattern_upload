@@ -87,6 +87,17 @@ public final class PatternUploadClient {
     /** 各目的地建議機器的電壓等級名（GTValues.VN 如 "LV"，照 index 對齊；空字串＝未知）。 */
     @Nullable
     private static String[] posTier = null;
+    /**
+     * 清單本體（1.33.0，EMI 路徑用）：GTOCore 群組標籤／icon 物品 id／滿槽，照 index 對齊。
+     * 人在 EMI 配方頁時 GTO 的 S2C 清單整包會被丟掉（它只在 {@code mc.screen} 是樣板終端時才填框），
+     * 故 EMI 路徑改用這份自建清單，完全不碰 GTO 的清單框。null／全 null＝舊伺服端沒回。
+     */
+    @Nullable
+    private static net.minecraft.network.chat.Component[] posName = null;
+    @Nullable
+    private static String[] posIconId = null;
+    @Nullable
+    private static boolean[] posFull = null;
 
     /**
      * 延遲決策：處理樣板的「自動直傳 vs 開面板」決策延到伺服端座標／建議回來再判。
@@ -97,8 +108,16 @@ public final class PatternUploadClient {
     private static final int DECIDE_WAIT_TICKS = 10;
     @Nullable
     private static PatternEncodingTermScreen<?> pendingScreen;
+    /**
+     * 面板／決策要掛在哪個畫面上（1.33.0）：終端路徑＝終端本身；**EMI 路徑＝EMI 配方頁**
+     * （整個編碼並上傳流程都留在 EMI 裡，不跳回終端）。
+     */
+    @Nullable
+    private static net.minecraft.client.gui.screens.Screen pendingHost;
     @Nullable
     private static List<ListBoxReflector.Dest> pendingDests;
+    /** true＝清單要等伺服端回覆自建（EMI 路徑），不是從 GTO 清單框劫持來的。 */
+    private static boolean pendingFromReply;
     private static boolean pendingForce;
     private static int pendingWaitTicks = -1;
 
@@ -127,6 +146,9 @@ public final class PatternUploadClient {
         posExtraMachine = null;
         posMachineKey = null;
         posContainerKind = null;
+        posName = null;
+        posIconId = null;
+        posFull = null;
         int gen = ++posGen;
         try {
             Network.requestPositions(menu.containerId, gen);
@@ -151,9 +173,12 @@ public final class PatternUploadClient {
         posExtraMachine = msg.extraMachine();
         posMachineKey = msg.machineKey();
         posContainerKind = msg.containerKind();
+        posName = msg.name();
+        posIconId = msg.iconId();
+        posFull = msg.full();
         LOGGER.info("[pattern_upload] received {} destination positions/suggestions (gen {})", msg.dims().length, msg.gen());
-        if (pendingDests != null) {
-            decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板
+        if (pendingDests != null || pendingFromReply) {
+            decidePending(); // 決策前的清單：座標／建議到齊 → 判自動直傳 vs 開面板（EMI 路徑清單也在這批裡）
         } else if (overlay != null) {
             overlay.onPositionsUpdated(); // 面板已開 → 只以新座標／建議重排刷新
         }
@@ -695,53 +720,62 @@ public final class PatternUploadClient {
         boolean force = forcePanel;
         forcePanel = false;
         if (!force && isCraftMode(screen.getMenu())) {
-            // 合成/鍛造/切石樣板：只有分子裝配室/裝配矩陣能做。伺服端 gto$craftFirst 對這些容器
-            // 不可靠（isCraftingContainer 沒實作、平手看網路迭代順序，分子裝配室可能排最後），
-            // 所以客戶端自己以 icon 認合成容器：挑第一個未滿的合成容器直傳；全滿 → 停止動作。
-            overlay = null;
-            var player = Minecraft.getInstance().player;
-            // 只允許分子裝配室/裝配矩陣；其他供應器一律不上傳（沒有保底）
-            ListBoxReflector.Dest target = null;
-            boolean sawCraftContainer = false;
-            for (var d : dests) {
-                if (RecipeTypeIcons.isCraftContainer(d.icon())) {
-                    sawCraftContainer = true;
-                    if (!d.full()) {
-                        target = d;
-                        break;
-                    }
-                }
-            }
-            if (target != null && blankPatternCount(screen.getMenu()) == 0) {
-                // 網路沒空白樣板 → 不上傳、不謊報成功
-                if (player != null) {
-                    player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                            "pattern_upload.no_blank"), false);
-                }
-                LOGGER.info("[pattern_upload] craft: no blank pattern in network, aborted");
-            } else if (target != null) {
-                ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
-                if (player != null) {
-                    // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）；目標優先報機器（icon 物品名）
-                    player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                            "pattern_upload.craft.sent", sentDisplayName(target, null)), false);
-                }
-                LOGGER.info("[pattern_upload] craft pattern sent directly to '{}'", target.name().getString());
-            } else if (player != null) {
-                player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
-                        sawCraftContainer ? "pattern_upload.craft.full" : "pattern_upload.craft.none"), false);
-            }
+            craftDirectSend(screen, dests);
             return;
         }
         // 處理樣板：把「自動直傳 vs 開面板」決策延到伺服端座標／建議回來再判（見 decidePending）。
         // 向伺服端要座標＋建議機器；收到（gen 相符）或逾時即決策。決策前不顯示面板（終端正常顯示）。
         requestPositionsFor(screen.getMenu());
         pendingScreen = screen;
+        pendingHost = screen;
         pendingDests = dests;
+        pendingFromReply = false;
         pendingForce = force;
         pendingWaitTicks = DECIDE_WAIT_TICKS;
         overlay = null;
         LOGGER.info("[pattern_upload] hijacked {} entries → awaiting positions/suggestions before deciding", dests.size());
+    }
+
+    /**
+     * 合成/鍛造/切石樣板的直傳：只有分子裝配室/裝配矩陣能做。伺服端 gto$craftFirst 對這些容器
+     * 不可靠（isCraftingContainer 沒實作、平手看網路迭代順序，分子裝配室可能排最後），
+     * 所以客戶端自己以 icon 認合成容器：挑第一個未滿的合成容器直傳；全滿 → 停止動作。
+     * 終端路徑與 EMI 路徑共用。
+     */
+    private static void craftDirectSend(PatternEncodingTermScreen<?> screen, List<ListBoxReflector.Dest> dests) {
+        overlay = null;
+        var player = Minecraft.getInstance().player;
+        // 只允許分子裝配室/裝配矩陣；其他供應器一律不上傳（沒有保底）
+        ListBoxReflector.Dest target = null;
+        boolean sawCraftContainer = false;
+        for (var d : dests) {
+            if (RecipeTypeIcons.isCraftContainer(d.icon())) {
+                sawCraftContainer = true;
+                if (!d.full()) {
+                    target = d;
+                    break;
+                }
+            }
+        }
+        if (target != null && blankPatternCount(screen.getMenu()) == 0) {
+            // 網路沒空白樣板 → 不上傳、不謊報成功
+            if (player != null) {
+                player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                        "pattern_upload.no_blank"), false);
+            }
+            LOGGER.info("[pattern_upload] craft: no blank pattern in network, aborted");
+        } else if (target != null) {
+            ((IExtendedPatternEncodingTerm.Menu) screen.getMenu()).gtolib$sendPattern(target.index());
+            if (player != null) {
+                // false = 聊天欄（actionbar 會被終端 GUI 蓋住看不到）；目標優先報機器（icon 物品名）
+                player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                        "pattern_upload.craft.sent", sentDisplayName(target, null)), false);
+            }
+            LOGGER.info("[pattern_upload] craft pattern sent directly to '{}'", target.name().getString());
+        } else if (player != null) {
+            player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                    sawCraftContainer ? "pattern_upload.craft.full" : "pattern_upload.craft.none"), false);
+        }
     }
 
     /**
@@ -751,16 +785,41 @@ public final class PatternUploadClient {
      */
     private static void decidePending() {
         PatternEncodingTermScreen<?> screen = pendingScreen;
+        net.minecraft.client.gui.screens.Screen host = pendingHost;
         List<ListBoxReflector.Dest> dests = pendingDests;
         boolean force = pendingForce;
+        boolean fromReply = pendingFromReply;
         pendingScreen = null;
+        pendingHost = null;
         pendingDests = null;
+        pendingFromReply = false;
         pendingWaitTicks = -1;
-        if (screen == null || dests == null) {
+        if (screen == null || host == null) {
             return;
         }
-        if (Minecraft.getInstance().screen != screen) {
-            return; // 決策前玩家已關/切終端 → 放棄
+        if (Minecraft.getInstance().screen != host) {
+            return; // 決策前玩家已關/切畫面（終端或 EMI 配方頁）→ 放棄
+        }
+        if (fromReply) {
+            // EMI 路徑：清單本體來自本 mod 自己的 S2C（GTO 的清單封包在 EMI 畫面下會被它自己丟掉）
+            dests = destsFromReply();
+            if (dests == null || dests.isEmpty()) {
+                var player = Minecraft.getInstance().player;
+                if (player != null) {
+                    player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                            "pattern_upload.emi.no_list"), false);
+                }
+                LOGGER.info("[pattern_upload] EMI upload: no destination list from server "
+                        + "(server-side mod missing, or encode produced nothing)");
+                return;
+            }
+            if (!force && isCraftMode(screen.getMenu())) {
+                craftDirectSend(screen, dests); // 合成類樣板：同終端路徑，直傳分子裝配室／裝配矩陣
+                return;
+            }
+        }
+        if (dests == null) {
+            return;
         }
         GTRecipeType current = force ? null : currentRecipeType(screen.getMenu());
         if (current != null) {
@@ -843,7 +902,7 @@ public final class PatternUploadClient {
                     readGtoRecipe(screen.getMenu()), outputSignature(screen.getMenu()));
         }
         // 座標／建議已在 pending 期間請求過，此時已載入 → 面板直接顯示正確機器與排序
-        overlay = new UploadOverlay(screen, dests, force);
+        overlay = new UploadOverlay(screen, host, dests, force);
         LOGGER.info("[pattern_upload] opened panel: {} entries", dests.size());
     }
 
@@ -995,19 +1054,75 @@ public final class PatternUploadClient {
     }
 
     /**
-     * EMI 配方頁的「編碼並上傳」鈕按下（配方已由 EMI 填進終端）：要一批目的地清單，
-     * 之後完全走既有流程（劫持清單 → 等座標／建議 → 唯一機器自動直傳／多台開面板）。
+     * EMI 配方頁的「編碼並上傳」鈕按下（配方已由 EMI 填進終端）：**整條流程留在 EMI 裡**。
      *
+     * <p>不能沿用終端路徑的清單來源——GTO 的 {@code Message$Client.patternDestinationReceived}
+     * 只在 {@code mc.screen} 是樣板編碼終端時才把清單填進它的列表框，人在 EMI 配方頁時整包被丟掉。
+     * 故這裡改用本 mod 自己的 S2C：`gtolib$sendEncodeRequest()` 之後緊接著送座標請求，
+     * 伺服端照封包到達順序處理（先編碼 → `gto$currentContainers` 就緒 → 再回我們的請求），
+     * 回覆裡除了原有的座標／建議／電壓／剩餘格，還帶**清單本體**（標籤／icon／滿槽，1.33.0）。
+     * 決策（自動直傳／開面板）與面板都掛在 {@code host}（EMI 配方頁）上，不跳回終端。
+     *
+     * @param term  樣板編碼終端畫面（提供選單；此刻不是當前畫面）
+     * @param host  面板要掛的畫面＝EMI 配方頁
      * @param force true＝這批一律開面板（中鍵手勢，比照終端上傳鈕中鍵）
      */
-    public static void uploadFromEmi(AbstractContainerMenu menu, boolean force) {
-        if (!(menu instanceof IExtendedPatternEncodingTerm.Menu term)) {
+    public static void uploadFromEmi(PatternEncodingTermScreen<?> term,
+                                     net.minecraft.client.gui.screens.Screen host, boolean force) {
+        AbstractContainerMenu menu = term.getMenu();
+        if (!(menu instanceof IExtendedPatternEncodingTerm.Menu gto)) {
             LOGGER.warn("[pattern_upload] EMI upload: menu is not a GTO pattern encoding term, ignored");
             return;
         }
-        forcePanel = force;
-        term.gtolib$sendEncodeRequest();
-        LOGGER.info("[pattern_upload] EMI upload button → encode request sent (forcePanel={})", force);
+        overlay = null;
+        forcePanel = false; // EMI 路徑不經 onRenderPre 的旗標，force 直接進 pending
+        gto.gtolib$sendEncodeRequest();
+        requestPositionsFor(menu); // 必須在編碼請求「之後」送：同連線後續封包 → 伺服端已編碼完才處理
+        pendingScreen = term;
+        pendingHost = host;
+        pendingDests = null;
+        pendingFromReply = true;
+        pendingForce = force;
+        pendingWaitTicks = DECIDE_WAIT_TICKS;
+        LOGGER.info("[pattern_upload] EMI upload button → encode + list request sent (force={})", force);
+    }
+
+    /**
+     * 以伺服端回覆的清單本體組出目的地清單（EMI 路徑）。索引與 {@code gto$currentContainers} 同序，
+     * 正好等同 GTO 會送給客戶端列表框的那份。伺服端沒裝本 mod／沒回這段 → null（呼叫端放棄並提示）。
+     */
+    @Nullable
+    private static List<ListBoxReflector.Dest> destsFromReply() {
+        net.minecraft.network.chat.Component[] names = posName;
+        String[] icons = posIconId;
+        boolean[] fulls = posFull;
+        if (names == null || icons == null || fulls == null || names.length == 0
+                || icons.length != names.length || fulls.length != names.length) {
+            return null;
+        }
+        List<ListBoxReflector.Dest> out = new java.util.ArrayList<>(names.length);
+        for (int i = 0; i < names.length; i++) {
+            if (names[i] == null) {
+                return null; // 舊伺服端：只有座標段、沒有清單本體
+            }
+            out.add(new ListBoxReflector.Dest(iconKeyOf(icons[i]), names[i], fulls[i], i));
+        }
+        return out;
+    }
+
+    /** 物品 id → AE2 icon key（清單 icon 與 GTO 列表框給的是同一個物品）。認不出回 null。 */
+    @Nullable
+    private static appeng.api.stacks.AEKey iconKeyOf(String id) {
+        try {
+            ResourceLocation rl = ResourceLocation.tryParse(id);
+            if (rl == null) {
+                return null;
+            }
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(rl);
+            return item == net.minecraft.world.item.Items.AIR ? null : appeng.api.stacks.AEItemKey.of(item);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /** 滑鼠是否落在上傳鈕矩形內（手動判界，不受按鈕 active 狀態影響）。 */
@@ -1061,12 +1176,22 @@ public final class PatternUploadClient {
         if (overlay != null && event.getScreen() == overlay.screen()) {
             overlay = null;
         }
+        // EMI 路徑：面板／決策掛在 EMI 配方頁上，關掉它就放棄這批（終端本身沒關，選單仍在）
+        if (pendingHost != null && event.getScreen() == pendingHost && pendingHost != pendingScreen) {
+            pendingScreen = null;
+            pendingHost = null;
+            pendingDests = null;
+            pendingFromReply = false;
+            pendingWaitTicks = -1;
+        }
         // 關終端就清中鍵旗標，避免無效樣板（伺服端沒回清單）殘留到下次右鍵誤觸
         if (event.getScreen() instanceof PatternEncodingTermScreen<?>) {
             forcePanel = false;
             // 放棄尚未決策的 pending（終端已關）
             pendingScreen = null;
+            pendingHost = null;
             pendingDests = null;
+            pendingFromReply = false;
             pendingWaitTicks = -1;
             // 換世代 + 清座標：關終端後若有慢回的 S2C 座標也視為過期，不落到下次開啟的清單
             posGen++;

@@ -153,6 +153,12 @@ public final class Network {
      * <p>
      * {@code free}（1.15.0）、{@code hasRecipe}（1.16.0）、{@code extras}（1.17.0）、{@code tier}（1.20.0）、
      * {@code sugMachine}/{@code extraMachine}（1.25.0）、{@code machineKey}（1.27.0）、
+     * {@code name}/{@code iconId}/{@code full}（1.33.0）是**清單本體**（GTOCore 群組標籤、群組 icon 物品 id、
+     * 是否滿槽），照 index 對齊。EMI 路徑用不到 GTO 的客戶端清單框（GTO 的
+     * {@code Message$Client.patternDestinationReceived} 只在 {@code mc.screen} 是樣板終端時才填框，
+     * 人在 EMI 配方頁時整包被丟掉），故清單本身改由本 mod 伺服端一併回報——索引與
+     * {@code gto$currentContainers} 同序，正好等同 GTO 送的那份。
+     * <p>
      * {@code containerKind}（1.31.0）是**尾綴欄位**（協定號不變）：encode 依序寫在
      * 原有欄位之後，decode 逐段以 {@code isReadable()} 偵測——舊伺服端沒寫 → 該段取預設（-1／false／空表／""）；
      * 舊客戶端不讀 → 剩餘 bytes 被丟棄無害。兩側版本不齊皆退預設值，不斷線、不炸包。
@@ -160,7 +166,8 @@ public final class Network {
      */
     public record ReplyS2C(int gen, long[] packed, ResourceLocation[] dims, String[] suggest, int[] free,
                            boolean[] hasRecipe, List<Extra> extras, String[] tier, String[] sugMachine,
-                           String[] extraMachine, String[] machineKey, String[] containerKind) {
+                           String[] extraMachine, String[] machineKey, String[] containerKind,
+                           net.minecraft.network.chat.Component[] name, String[] iconId, boolean[] full) {
 
         /** 被 GTO 藏掉的「已有該配方」供應器：GTOCore 群組標籤名、群組 icon 物品 id、建議機器、剩餘格。 */
         public record Extra(String name, String iconId, String suggest, int free) {}
@@ -204,6 +211,11 @@ public final class Network {
             }
             for (int i = 0; i < m.packed.length; i++) {
                 b.writeUtf(m.containerKind[i] == null ? "" : m.containerKind[i]);
+            }
+            for (int i = 0; i < m.packed.length; i++) {
+                b.writeComponent(m.name[i] == null ? net.minecraft.network.chat.Component.empty() : m.name[i]);
+                b.writeUtf(m.iconId[i] == null ? "" : m.iconId[i]);
+                b.writeBoolean(m.full[i]);
             }
         }
 
@@ -276,8 +288,20 @@ public final class Network {
                     containerKind[i] = b.readUtf();
                 }
             }
+            // 清單本體（1.33.0）：舊伺服端沒寫 → name 全 null，客戶端據此判定「這份回覆不能單獨當清單用」
+            net.minecraft.network.chat.Component[] name = new net.minecraft.network.chat.Component[n];
+            String[] iconId = new String[n];
+            boolean[] full = new boolean[n];
+            java.util.Arrays.fill(iconId, "");
+            if (b.isReadable()) {
+                for (int i = 0; i < n; i++) {
+                    name[i] = b.readComponent();
+                    iconId[i] = b.readUtf();
+                    full[i] = b.readBoolean();
+                }
+            }
             return new ReplyS2C(gen, packed, dims, suggest, free, hasRecipe, extras, tier, sugMachine, extraMachine,
-                    machineKey, containerKind);
+                    machineKey, containerKind, name, iconId, full);
         }
     }
 
@@ -311,6 +335,9 @@ public final class Network {
             String[] containerKind = new String[n];
             int[] free = new int[n];
             boolean[] hasRecipe = new boolean[n];
+            net.minecraft.network.chat.Component[] name = new net.minecraft.network.chat.Component[n];
+            String[] iconId = new String[n];
+            boolean[] full = new boolean[n];
             // 本次編碼樣板的主產物（GTO 上傳去重同款判定：mixin 暫存 gto$patternStack → decode → primaryOutput）
             AEKey primaryOut = primaryOutputOfEncoding(menu, player.level());
             // request 範圍內以子網 grid 為鍵快取建議機器＋電壓：多個供應器橋接同一子網時只掃一次
@@ -323,12 +350,31 @@ public final class Network {
                 sugMachine[i] = "";
                 machineKey[i] = "";
                 containerKind[i] = containerKindOf(o);
+                name[i] = net.minecraft.network.chat.Component.empty();
+                iconId[i] = "";
                 free[i] = -1;
                 if (o instanceof IExtendedPatternContainer c) {
+                    // 清單本體（1.33.0）：GTO 送給客戶端清單框的同一份標籤／icon（同一支 getTerminalGroup）
+                    try {
+                        var group = c.getTerminalGroup();
+                        if (group != null) {
+                            if (group.name() != null) {
+                                name[i] = group.name();
+                            }
+                            if (group.icon() != null) {
+                                var key = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                                        .getKey(group.icon().getItem());
+                                iconId[i] = key == null ? "" : key.toString();
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                        // 標籤取不到 → 空（客戶端退樣板 icon／空名）
+                    }
                     // 剩餘格／已有配方對「任何」樣板容器都算得出（走 PatternContainer 樣板庫存）——
                     // GTO 樣板總成（MEPatternPartMachineKt 家族：直接實作 IExtendedPatternContainer、
                     // 非 AE2 供應器、無 IPPPC mixin）也涵蓋。
                     free[i] = countFreePatternSlots(c);
+                    full[i] = free[i] == 0; // 樣板槽零空位＝GTO 清單的「滿」
                     hasRecipe[i] = primaryOut != null && containsPrimaryOutput(c, primaryOut, player.level());
                     if (c instanceof IExtendedPatternContainer.IPPPC ippc) {
                         Level level = ippc.gto$getLevel();
@@ -368,7 +414,7 @@ public final class Network {
                             gridCache, extraMachine);
             CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
                     new ReplyS2C(msg.gen(), packed, dims, suggest, free, hasRecipe, extras, tier, sugMachine,
-                            extraMachine.toArray(new String[0]), machineKey, containerKind));
+                            extraMachine.toArray(new String[0]), machineKey, containerKind, name, iconId, full));
         });
         ctx.setPacketHandled(true);
     }

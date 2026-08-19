@@ -10,6 +10,7 @@
   "pattern_upload.craft.sent": "合成样板已上传：%s",
   "pattern_upload.craft.title": "合成样板（分子装配室/装配矩阵）",
   "pattern_upload.dup.warn": "同名供应器会共用指定；要分开请先改名",
+  "pattern_upload.emi.no_list": "取不到目的地列表（服务端未安装本 mod 或编码失败）",
   "pattern_upload.emi.upload": "编码并上传",
   "pattern_upload.emi.upload.desc": "填充配方后直接上传：唯一机器自动上传，多台则开面板选",
   "pattern_upload.emi.upload.force": "中键：一律开面板选机器",

@@ -10,6 +10,7 @@
   "pattern_upload.craft.sent": "Crafting pattern sent to: %s",
   "pattern_upload.craft.title": "Crafting pattern (molecular assembler / assembler matrix)",
   "pattern_upload.dup.warn": "Same-named providers share this assignment; rename them to separate",
+  "pattern_upload.emi.no_list": "No destination list (server lacks this mod, or encoding failed)",
   "pattern_upload.emi.upload": "Encode and upload",
   "pattern_upload.emi.upload.desc": "Fills the recipe, then uploads it: auto-sends when exactly one machine matches",
   "pattern_upload.emi.upload.force": "Middle-click: always open the destination panel",

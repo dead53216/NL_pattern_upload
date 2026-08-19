@@ -11,7 +11,6 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.inventory.tooltip.ClientTooltipComponent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 
 import appeng.client.gui.me.items.PatternEncodingTermScreen;
 
@@ -27,13 +26,16 @@ import java.util.List;
 /**
  * EMI 配方頁的「編碼並上傳」鈕：等同在樣板編碼終端按 GTOCore 的上傳鈕（編碼並發送）。
  *
- * <p>按下時**先借 EMI 自己的填充配方鈕**跑一次填充（{@code canFill} 判定、Shift 全量、音效、
- * 關閉配方頁全照 EMI／GTOCore 原邏輯），成功才接著要一批目的地清單走本 mod 既有的
- * 「唯一機器自動直傳 / 多台開面板」決策——故行為與終端上傳鈕一模一樣，只是從 EMI 直接發動。
+ * <p>按下時**先借 EMI 自己的填充配方鈕**跑一次填充（{@code canFill} 判定、Shift 全量、音效全照
+ * EMI／GTOCore 原邏輯），成功才接著要一批目的地清單走「唯一機器自動直傳 / 多台開面板」決策——
+ * 行為與終端上傳鈕一模一樣，但**整條流程留在 EMI 裡**：不關配方頁、面板也開在 EMI 上。
+ *
+ * <p>不關 EMI 的作法見 {@link #mouseClicked}；清單為何要改由本 mod 伺服端回報見
+ * {@code PatternUploadClient.uploadFromEmi}。
  *
  * <p>順序安全：EMI 填充是把 {@code FakeSlot.setFilterTo} 的封包送給伺服端（客戶端槽不會當場更新），
  * 我們的編碼請求是**同一條連線的後續封包**，伺服端照到達順序處理 → 編碼時看到的必是填好的格子。
- * 客戶端這邊的機器判定發生在 {@code decidePending}（等座標／建議回來才判），那時槽位早已同步回來。
+ * 客戶端這邊的機器判定發生在 {@code decidePending}（等清單／建議回來才判），那時槽位早已同步回來。
  *
  * <p>本類與 {@link EmiUploadIntegration} 是**唯二**碰 {@code dev.emi.*} 的類，只在 EMI 存在時才會被載入。
  */
@@ -99,13 +101,25 @@ public final class EmiUploadButton extends Widget {
                 || !(term instanceof IExtendedPatternEncodingTerm)) {
             return false;
         }
-        AbstractContainerMenu menu = term.getMenu();
+        // 借 EMI 填充鈕跑填充，但**不讓 GTOCore 把 EMI 關掉**：
+        // GTO 的 GTAe2PatternTerminalHandler.craft() 末尾會 `if (mc.screen instanceof RecipeScreen rs) rs.close()`。
+        // 填充期間把 mc.screen 直接指向終端（不經 setScreen，不跑 removed/init 生命週期，中間也不會有 tick／render）
+        // → GTO 那個 instanceof 不成立、EMI 留著；EmiApi.getHandledScreen() 反而更直接（AbstractContainerScreen 分支）。
+        Minecraft mc = Minecraft.getInstance();
+        boolean filled;
+        mc.screen = term;
+        try {
+            filled = fillButton.mouseClicked(mouseX, mouseY, 0);
+        } finally {
+            mc.screen = recipeScreen;
+        }
         // 填充失敗（缺料／本配方不支援）→ 與 EMI 填充鈕同樣靜默不動作，也不送編碼請求
-        if (!fillButton.mouseClicked(mouseX, mouseY, 0)) {
+        if (!filled) {
             return false;
         }
-        // 中鍵＝強制開面板（比照終端上傳鈕的中鍵手勢）；左／右鍵走一般自動直傳決策
-        PatternUploadClient.uploadFromEmi(menu, button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE);
+        // 中鍵＝強制開面板（比照終端上傳鈕的中鍵手勢）；左／右鍵走一般自動直傳決策。
+        // 決策與面板都掛在 EMI 配方頁上——整條編碼並上傳流程不跳回終端。
+        PatternUploadClient.uploadFromEmi(term, recipeScreen, button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE);
         return true;
     }
 }
