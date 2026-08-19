@@ -119,6 +119,12 @@ public final class PatternUploadClient {
     /** true＝清單要等伺服端回覆自建（EMI 路徑），不是從 GTO 清單框劫持來的。 */
     private static boolean pendingFromReply;
     /**
+     * EMI 這則配方是不是**合成類**（AE2 `isSupportedCraftingRecipe`＝CRAFTING/STONECUTTING/SMITHING）。
+     * 由 EMI 配方的 backing recipe 當場判定，不看（會慢一 tick 的）選單模式——否則合成樣板只能靠
+     * 快照等待逾時才判得出來（合成樣板的處理產物格是空的，快照永遠不變＝每次都要等滿）。
+     */
+    private static boolean pendingEmiCraft;
+    /**
      * EMI 路徑的**權威配方**（1.34.1）：EMI 的填充只是把 {@code FakeSlot.setFilterTo} 的封包送出去，
      * 客戶端的編碼格與 {@code gtocore$recipe} 要下一 tick 才會同步回來——這期間去讀選單判機器，
      * 拿到的是**上一張樣板**的配方（症狀：上傳到上次那台機器）。
@@ -454,9 +460,16 @@ public final class PatternUploadClient {
      * EMI 填充後選單要下一 tick 才同步，快照沒變＝還是上一張，不能拿來判機器。
      */
     private static String menuSnapshot(AbstractContainerMenu menu) {
-        String mode = menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm
-                ? String.valueOf(petm.getMode()) : "";
-        return mode + '|' + readGtoRecipe(menu) + '|' + outputSignature(menu);
+        StringBuilder sb = new StringBuilder();
+        if (menu instanceof appeng.menu.me.items.PatternEncodingTermMenu petm) {
+            sb.append(petm.getMode());
+            // 合成類樣板的處理產物格是空的，只看它快照永遠不變 → 合成格也要進簽章
+            for (var slot : petm.getCraftingGridSlots()) {
+                var st = slot.getItem();
+                sb.append(st.isEmpty() ? 0 : appeng.api.stacks.AEItemKey.of(st).hashCode()).append(',');
+            }
+        }
+        return sb + "|" + readGtoRecipe(menu) + '|' + outputSignature(menu);
     }
 
     /**
@@ -887,7 +900,7 @@ public final class PatternUploadClient {
         if (pendingFromReply && pendingSnapshot != null && pendingSyncWait > 0 && pendingScreen != null
                 && pendingSnapshot.equals(menuSnapshot(pendingScreen.getMenu()))) {
             pendingSyncWait--;
-            pendingWaitTicks = 1; // 下一 tick 再判（逾時計數由 onClientTick 推進）
+            pendingWaitTicks = 0; // 下一 tick 再判（onClientTick 會 --後 <0 → 觸發）
             return;
         }
         pendingSnapshot = null;
@@ -897,10 +910,12 @@ public final class PatternUploadClient {
         List<ListBoxReflector.Dest> dests = pendingDests;
         boolean force = pendingForce;
         boolean fromReply = pendingFromReply;
+        boolean emiCraft = pendingEmiCraft;
         pendingScreen = null;
         pendingHost = null;
         pendingDests = null;
         pendingFromReply = false;
+        pendingEmiCraft = false;
         pendingWaitTicks = -1;
         if (screen == null || host == null) {
             return;
@@ -921,8 +936,9 @@ public final class PatternUploadClient {
                         + "(server-side mod missing, or encode produced nothing)");
                 return;
             }
-            if (!force && isCraftMode(screen.getMenu())) {
-                craftDirectSend(screen, dests); // 合成類樣板：同終端路徑，直傳分子裝配室／裝配矩陣
+            // 合成類：以 EMI 配方本身判定為準（選單模式此刻可能還沒同步），退回選單模式當後備
+            if (!force && (emiCraft || isCraftMode(screen.getMenu()))) {
+                craftDirectSend(screen, dests); // 同終端路徑，直傳分子裝配室／裝配矩陣
                 return;
             }
         }
@@ -1177,7 +1193,7 @@ public final class PatternUploadClient {
      */
     public static void uploadFromEmi(PatternEncodingTermScreen<?> term,
                                      net.minecraft.client.gui.screens.Screen host, boolean force,
-                                     @Nullable ResourceLocation recipeId) {
+                                     @Nullable ResourceLocation recipeId, boolean crafting) {
         AbstractContainerMenu menu = term.getMenu();
         if (!(menu instanceof IExtendedPatternEncodingTerm.Menu gto)) {
             LOGGER.warn("[pattern_upload] EMI upload: menu is not a GTO pattern encoding term, ignored");
@@ -1195,11 +1211,14 @@ public final class PatternUploadClient {
         pendingFromReply = true;
         pendingForce = force;
         pendingWaitTicks = DECIDE_WAIT_TICKS;
-        pendingSnapshot = known ? null : menuSnapshot(menu); // 非 GT 配方：只能等選單同步再判
-        pendingSyncWait = known ? 0 : EMI_SYNC_WAIT;
+        pendingEmiCraft = crafting;
+        // 只有「非 GT 配方且非合成類」才沒有權威來源，得等客戶端選單同步才判得準
+        boolean needSync = !known && !crafting;
+        pendingSnapshot = needSync ? menuSnapshot(menu) : null;
+        pendingSyncWait = needSync ? EMI_SYNC_WAIT : 0;
         LOGGER.info("[pattern_upload] EMI upload button → encode + list request sent (force={}, recipe={}, "
-                + "type={}, tier={}, cat='{}')", force, recipeId, emiType == null ? null : emiType.registryName,
-                emiTier, emiCat);
+                + "type={}, tier={}, cat='{}', crafting={})", force, recipeId,
+                emiType == null ? null : emiType.registryName, emiTier, emiCat, crafting);
     }
 
     /**

@@ -115,8 +115,12 @@ public final class EmiUploadButton extends RecipeFillButtonWidget {
         // 決策與面板都掛在 EMI 配方頁上——整條編碼並上傳流程不跳回終端。
         // 帶上這則配方的 id：GT 配方即 GTRecipeDefinition.id，客戶端據此當場定機器，
         // 不必等（會慢一 tick 的）選單同步——否則判到的是上一張樣板的機器。
+        // 合成類（CRAFTING/STONECUTTING/SMITHING，AE2 同一支判定）也在這裡定案：合成樣板的處理產物格
+        // 是空的，等選單同步的快照永遠不變 → 不先判就得每次等滿逾時才送得出去。
+        boolean crafting = appeng.integration.modules.jeirei.EncodingHelper
+                .isSupportedCraftingRecipe(this.recipe.getBackingRecipe());
         PatternUploadClient.uploadFromEmi(term, recipeScreen, button == GLFW.GLFW_MOUSE_BUTTON_MIDDLE,
-                this.recipe.getId());
+                this.recipe.getId(), crafting);
         return true;
     }
 }
