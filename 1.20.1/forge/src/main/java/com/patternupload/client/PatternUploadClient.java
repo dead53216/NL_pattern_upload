@@ -165,10 +165,31 @@ public final class PatternUploadClient {
      * 記下按鈕按下當時的選單快照，選單狀態沒變就再等一 tick（上限 {@link #EMI_SYNC_WAIT}），
      * 免得用上一張樣板的殘留狀態判定。
      */
+    /**
+     * EMI 上傳的**第一階段**（1.35.1）：填充落地等待。
+     *
+     * <p>EMI 的填充只是把封包送給伺服端，客戶端當下看不到結果；而 GTOCore 的
+     * {@code gtolib$sendEncodeRequest} 一到伺服端就 {@code encodePattern()}——**填充還沒生效時去編碼，
+     * 編出來的是上一張樣板**（或整個失敗、`gto$currentContainers` 連設都沒設，客戶端連回覆都收不到）。
+     * 症狀就是「第一次點沒反應、第二次才成功」與「把上一張（組裝機）的樣板丟到分子裝配室」。
+     *
+     * <p>故改成兩階段：填充後**先等客戶端選單真的反映出新樣板**（＝伺服端已經收下並同步回來），
+     * 才送編碼請求。等不到（樣板與上一張完全相同 → 快照本來就不會變）就等到上限後照送，
+     * 那種情況伺服端狀態本來就已經是對的。
+     */
     @Nullable
-    private static String pendingSnapshot;
-    private static int pendingSyncWait;
-    private static final int EMI_SYNC_WAIT = 20;
+    private static PatternEncodingTermScreen<?> fillTerm;
+    @Nullable
+    private static net.minecraft.client.gui.screens.Screen fillHost;
+    @Nullable
+    private static ResourceLocation fillRecipeId;
+    @Nullable
+    private static String fillSnapshot;
+    private static boolean fillForce;
+    private static boolean fillCraft;
+    private static int fillWait = -1;
+    /** 填充落地等待上限（tick）。實測單機 1–3 tick 就同步回來；等滿只發生在「樣板完全沒變」。 */
+    private static final int EMI_FILL_WAIT = 20;
     private static boolean pendingForce;
     private static int pendingWaitTicks = -1;
 
@@ -974,16 +995,6 @@ public final class PatternUploadClient {
      * 剛好一個 → 直傳；多個 → 開面板讓玩家自選（不亂猜）；零個 → 開面板。清 pending。
      */
     private static void decidePending() {
-        // 非 GT 配方走 EMI 路徑：EMI 填充只送封包，客戶端選單要下一 tick 才反映新樣板 →
-        // 選單快照沒變就再等一 tick（上限 EMI_SYNC_WAIT），免得拿上一張樣板的殘留狀態判機器。
-        if (pendingFromReply && pendingSnapshot != null && pendingSyncWait > 0 && pendingScreen != null
-                && pendingSnapshot.equals(menuSnapshot(pendingScreen.getMenu()))) {
-            pendingSyncWait--;
-            pendingWaitTicks = 0; // 下一 tick 再判（onClientTick 會 --後 <0 → 觸發）
-            return;
-        }
-        pendingSnapshot = null;
-        pendingSyncWait = 0;
         PatternEncodingTermScreen<?> screen = pendingScreen;
         net.minecraft.client.gui.screens.Screen host = pendingHost;
         List<ListBoxReflector.Dest> dests = pendingDests;
@@ -1280,15 +1291,49 @@ public final class PatternUploadClient {
             LOGGER.warn("[pattern_upload] EMI upload: menu is not a GTO pattern encoding term, ignored");
             return;
         }
-        // 上一次 EMI 上傳還在決策中（等清單／等選單同步）→ 忽略這次點擊。
-        // 否則連點會每次重置等待計數，決策永遠跑不完＝按了完全沒反應（1.34.3）。
-        if (pendingFromReply && pendingScreen == term) {
-            LOGGER.info("[pattern_upload] EMI upload button ignored: previous request still deciding");
+        // 前一次的 EMI 上傳還沒跑完（等填充落地／等清單）→ 忽略這次點擊，連點不會把自己的請求踢掉
+        if (fillWait >= 0 || (pendingFromReply && pendingScreen == term)) {
+            LOGGER.info("[pattern_upload] EMI upload button ignored: previous request still in flight");
             return;
         }
         overlay = null;
         forcePanel = false; // EMI 路徑不經 onRenderPre 的旗標，force 直接進 pending
-        // 機器判定的權威來源＝這則 EMI 配方本身（客戶端選單此刻還是上一張樣板，見 emiType）
+        // 第一階段：**先等填充在伺服端落地**再送編碼請求（見 fillWait 的說明）
+        fillTerm = term;
+        fillHost = host;
+        fillRecipeId = recipeId;
+        fillForce = force;
+        fillCraft = crafting;
+        fillSnapshot = menuSnapshot(menu);
+        fillWait = EMI_FILL_WAIT;
+        LOGGER.info("[pattern_upload] EMI upload button → filled, waiting for it to land "
+                + "(force={}, recipe={}, crafting={})", force, recipeId, crafting);
+    }
+
+    /** 放棄尚未送出的 EMI 上傳（換畫面／關終端）。 */
+    private static void clearFillWait() {
+        fillTerm = null;
+        fillHost = null;
+        fillRecipeId = null;
+        fillSnapshot = null;
+        fillWait = -1;
+    }
+
+    /**
+     * 第二階段：填充已落地（或等到上限）→ 送編碼請求＋清單請求，之後走既有決策。
+     * 機器判定的權威來源仍是**這則 EMI 配方本身**（{@link #emiType}），不看客戶端選單。
+     */
+    private static void startEmiRequest(boolean synced) {
+        PatternEncodingTermScreen<?> term = fillTerm;
+        var host = fillHost;
+        ResourceLocation recipeId = fillRecipeId;
+        boolean force = fillForce;
+        boolean crafting = fillCraft;
+        clearFillWait();
+        if (term == null || host == null || !(term.getMenu() instanceof IExtendedPatternEncodingTerm.Menu gto)) {
+            return;
+        }
+        AbstractContainerMenu menu = term.getMenu();
         boolean known = resolveEmiRecipe(menu, recipeId);
         gto.gtolib$sendEncodeRequest();
         requestPositionsFor(menu); // 必須在編碼請求「之後」送：同連線後續封包 → 伺服端已編碼完才處理
@@ -1299,13 +1344,9 @@ public final class PatternUploadClient {
         pendingForce = force;
         pendingWaitTicks = DECIDE_WAIT_TICKS;
         pendingEmiCraft = crafting;
-        // 只有「非 GT 配方且非合成類」才沒有權威來源，得等客戶端選單同步才判得準
-        boolean needSync = !known && !crafting;
-        pendingSnapshot = needSync ? menuSnapshot(menu) : null;
-        pendingSyncWait = needSync ? EMI_SYNC_WAIT : 0;
-        LOGGER.info("[pattern_upload] EMI upload button → encode + list request sent (force={}, recipe={}, "
-                + "type={}, tier={}, cat='{}', crafting={})", force, recipeId,
-                emiType == null ? null : emiType.registryName, emiTier, emiCat, crafting);
+        LOGGER.info("[pattern_upload] EMI encode + list request sent (synced={}, force={}, recipe={}, "
+                + "type={}, tier={}, cat='{}', crafting={}, known={})", synced, force, recipeId,
+                emiType == null ? null : emiType.registryName, emiTier, emiCat, crafting, known);
     }
 
     /**
@@ -1410,6 +1451,7 @@ public final class PatternUploadClient {
             forcePanel = false;
             clearEmiRecipe();
             clearVerify();
+            clearFillWait();
             // 放棄尚未決策的 pending（終端已關）
             pendingScreen = null;
             pendingHost = null;
@@ -1462,6 +1504,18 @@ public final class PatternUploadClient {
             return;
         }
         // 決策逾時：伺服端沒回座標／建議（沒裝本 mod）→ 到期用現有資料（無建議）決策，維持舊行為
+        // 第一階段：等 EMI 的填充在伺服端落地（客戶端選單反映出來就代表伺服端已收下）
+        if (fillWait >= 0) {
+            var term = fillTerm;
+            if (term == null || Minecraft.getInstance().screen != fillHost) {
+                clearFillWait(); // 玩家已切走 → 放棄
+            } else if (!menuSnapshot(term.getMenu()).equals(fillSnapshot)) {
+                startEmiRequest(true);
+            } else if (--fillWait < 0) {
+                // 等不到變化＝樣板與上一張完全相同（伺服端狀態本來就對）→ 照送
+                startEmiRequest(false);
+            }
+        }
         if (pendingWaitTicks >= 0 && --pendingWaitTicks < 0) {
             decidePending();
         }
